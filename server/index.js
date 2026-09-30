@@ -573,8 +573,8 @@ app.get('/stream/:id', (req, res) => {
   if (!song) return res.status(404).end();
 
   // B 站网络歌曲直接代理流
-  if (song.filepath && song.filepath.startsWith('bilibili:')) {
-    const parts = song.filepath.split(':');
+  if (song.filename && song.filename.startsWith('bilibili:')) {
+    const parts = song.filename.split(':');
     const bvid = parts[1];
     const cid = parts[2];
     return proxyBilibiliStream(req, res, bvid, cid);
