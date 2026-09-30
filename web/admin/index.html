@@ -300,7 +300,7 @@ function render(list){
   list.forEach((s,i)=>{
     const d=document.createElement('div');d.className='song-card';d.dataset.id=s.id;
     d.innerHTML=`<input type="checkbox" class="sc-cb" value="${s.id}" checked>
-      <img src="/api/cover/${s.id}" class="sc-img" onerror="this.style.display='none'">
+      <img src="/api/cover/${s.id}?v=${encodeURIComponent(s.title||s.id)}" class="sc-img" onerror="this.src='/icons/album.svg'">
       <div class="sc-info"><div class="sc-title">${esc(s.title)}</div>
       <div class="sc-meta"><span>${esc(s.artist||'未知歌手')}</span><span>▶ ${s.play_count}</span>${s.accompaniment_valid?'<span style="color:var(--accent2)">🎵伴奏</span>':''}</div></div>
       <div class="sc-acts"><button class="act-btn act-edit" onclick="openEdit(${s.id},'${esc(s.title)}','${esc(s.artist||'')}')">编辑</button>

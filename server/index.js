@@ -214,7 +214,7 @@ app.get('/api/cover/:id', (req, res) => {
       const bvid = parts[1];
       const localCover = path.join(config.BILI_CACHE_DIR, `${bvid}_cover.jpg`);
       if (fs.existsSync(localCover) && fs.statSync(localCover).size > 0) {
-        res.set({ 'Cache-Control': 'public, max-age=86400' });
+        res.set({ 'Cache-Control': 'no-cache, must-revalidate' });
         return res.sendFile(localCover);
       }
       if (song.cover && song.cover.startsWith('http')) {
@@ -224,7 +224,7 @@ app.get('/api/cover/:id', (req, res) => {
       if (song.filepath) {
         const coverPath = path.join(path.dirname(song.filepath), 'cover.jpg');
         if (fs.existsSync(coverPath)) {
-          res.set({ 'Cache-Control': 'public, max-age=86400' });
+          res.set({ 'Cache-Control': 'no-cache, must-revalidate' });
           return res.sendFile(coverPath);
         }
       }

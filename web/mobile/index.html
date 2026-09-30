@@ -579,7 +579,7 @@ function renderSongs(list,cont){
   el.innerHTML='';
   list.forEach(s=>{
     var c=document.createElement('div');c.className='song-card';
-    c.innerHTML='<img src="/api/cover/'+s.id+'" style="width:36px;height:36px;border-radius:6px;object-fit:cover;flex-shrink:0" onerror="this.style.display=\'none\'">'
+    c.innerHTML='<img src="/api/cover/'+s.id+'?v='+encodeURIComponent(s.title||s.id)+'" referrerpolicy="no-referrer" style="width:36px;height:36px;border-radius:6px;object-fit:cover;flex-shrink:0" onerror="this.src=\'/icons/album.svg\'">'
       +'<div class="info"><div class="title">'+esc(s.title)+'</div><div class="artist">'+esc(s.artist||'')+'</div></div>'
       +'<div class="btn-fav'+(localStorage.getItem('fav_'+s.id)==='1'?' faved':'')+'" data-id="'+s.id+'">❤</div>'
       +'<button class="btn-add">＋</button>';
@@ -685,7 +685,7 @@ async function loadArtistSongs(artist){
   var el=document.getElementById('artist-song-list');el.innerHTML='';
   songs.forEach(s=>{
     var c=document.createElement('div');c.className='song-card';
-    c.innerHTML='<img src="/api/cover/'+s.id+'" style="width:36px;height:36px;border-radius:6px;object-fit:cover;flex-shrink:0" onerror="this.style.display=\'none\'">'
+    c.innerHTML='<img src="/api/cover/'+s.id+'?v='+encodeURIComponent(s.title||s.id)+'" referrerpolicy="no-referrer" style="width:36px;height:36px;border-radius:6px;object-fit:cover;flex-shrink:0" onerror="this.src=\'/icons/album.svg\'">'
       +'<div class="info"><div class="title">'+esc(s.title)+'</div><div class="artist">'+esc(s.artist||'')+'</div></div>'
       +'<div class="btn-fav'+(localStorage.getItem('fav_'+s.id)==='1'?' faved':'')+'" data-id="'+s.id+'">❤</div>'
       +'<button class="btn-add">＋</button>';
@@ -705,7 +705,7 @@ async function loadFavorites(){
   emp.style.display='none';
   songs.forEach(s=>{
     var c=document.createElement('div');c.className='song-card';
-    c.innerHTML='<img src="/api/cover/'+s.id+'" style="width:36px;height:36px;border-radius:6px;object-fit:cover;flex-shrink:0" onerror="this.style.display=\'none\'">'
+    c.innerHTML='<img src="/api/cover/'+s.id+'?v='+encodeURIComponent(s.title||s.id)+'" referrerpolicy="no-referrer" style="width:36px;height:36px;border-radius:6px;object-fit:cover;flex-shrink:0" onerror="this.src=\'/icons/album.svg\'">'
       +'<div class="info"><div class="title">'+esc(s.title)+'</div><div class="artist">'+esc(s.artist||'')+'</div></div>'
       +'<div class="btn-fav faved" data-id="'+s.id+'">❤</div>'
       +'<button class="btn-add">＋</button>';
