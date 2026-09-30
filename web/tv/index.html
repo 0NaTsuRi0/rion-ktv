@@ -74,7 +74,10 @@ body{width:100vw;height:100vh;overflow:hidden;background:#000;color:var(--text);
 <div id="video-layer">
   <video id="video" muted></video>
   <div id="fs-idle"><div class="big">璃音K歌</div><div class="sub">扫码点歌 · 大屏沉浸演唱</div><div class="sub" style="margin-top:20px;color:#ff8c42;font-size:16px">👆 点击屏幕开始</div></div>
-  <div id="load-overlay"><div class="spinner"></div></div>
+  <div id="load-overlay">
+    <div class="spinner"></div>
+    <div id="load-text" style="margin-top:16px;font-size:16px;color:#fff;font-weight:600;text-shadow:0 2px 8px rgba(0,0,0,0.8);max-width:80%;text-align:center">正在加载...</div>
+  </div>
 </div>
 
 <div id="top-bar">
@@ -247,8 +250,12 @@ function loadSong(songId, track){
   loadDur=curSong&&curSong.duration?curSong.duration:0;
   if(!loadDur){fetch('/api/songs/'+songId+'/meta').then(r=>r.json()).then(d=>{if(d.duration)loadDur=d.duration;}).catch(()=>{});}
   clearTimeout(window._loadTimeout);
-  window._loadTimeout=setTimeout(()=>{loadOverlay.style.display='none';if(progBar)progBar.style.display='';},60000);
+  window._loadTimeout=setTimeout(()=>{loadOverlay.style.display='none';if(progBar)progBar.style.display='';},120000);
   destroyHLS();
+
+  const isBili = curSong && curSong.filename && curSong.filename.startsWith('bilibili:');
+  const lt = document.getElementById('load-text');
+  if(lt) lt.textContent = isBili ? '正在从 B 站下载音视频并快速生成切片，请稍候...' : '正在加载...';
   loadOverlay.style.display='flex';
 
   if(Hls.isSupported()){
@@ -256,13 +263,22 @@ function loadSong(songId, track){
     hls=new Hls({
       startLevel:0,
       lowBufferWatchdogPeriod:0.5,
-      maxBufferLength:1,
-      maxMaxBufferLength:1,
+      maxBufferLength:2,
+      maxMaxBufferLength:5,
       backbufferLength:0,
       startFragPrefetch:true,
-      appendErrorMaxRetry:0,
+      appendErrorMaxRetry:3,
       startPosition:0,
       autoStartLoad:true,
+      manifestLoadingTimeOut:60000,
+      manifestLoadingMaxRetry:10,
+      manifestLoadingRetryDelay:1000,
+      levelLoadingTimeOut:120000,
+      levelLoadingMaxRetry:20,
+      levelLoadingRetryDelay:1000,
+      fragLoadingTimeOut:120000,
+      fragLoadingMaxRetry:20,
+      fragLoadingRetryDelay:1000,
       xhrSetup(xhr,url){
         xhr.setRequestHeader('Cache-Control','no-cache');
         xhr.setRequestHeader('Pragma','no-cache');
@@ -282,7 +298,25 @@ function loadSong(songId, track){
       fsIdle.style.display='none';loadOverlay.style.display='none';if(progBar)progBar.style.display='';
       video.play().catch(()=>{});
     });
-    hls.on(Hls.Events.ERROR,(e,d)=>{if(d.fatal)destroyHLS();});
+    hls.on(Hls.Events.ERROR,(e,d)=>{
+      console.warn('HLS Event Error:', d.type, d.details, 'fatal:', d.fatal);
+      if(d.fatal){
+        switch(d.type){
+          case Hls.ErrorTypes.NETWORK_ERROR:
+            console.log('HLS 网络错误，尝试自动恢复重试...');
+            hls.startLoad();
+            break;
+          case Hls.ErrorTypes.MEDIA_ERROR:
+            console.log('HLS 媒体解码错误，尝试自动恢复...');
+            hls.recoverMediaError();
+            break;
+          default:
+            console.error('HLS 致命错误，无法恢复:', d);
+            destroyHLS();
+            break;
+        }
+      }
+    });
   }else{
     video.src='/stream/'+songId+'?t='+Date.now();
     video.play().catch(()=>{});

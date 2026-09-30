@@ -118,6 +118,7 @@ async function searchBilibili(keyword, page = 1) {
     keyword: keyword.trim(),
     search_type: 'video',
     page: page,
+    page_size: 10,
     wts: wts
   };
 
@@ -153,7 +154,7 @@ async function searchBilibili(keyword, page = 1) {
       duration: r.duration,
       play: r.play
     }));
-    return list;
+    return list.slice(0, 10);
   } catch(e) {
     log.error('BILI', `搜索执行失败: ${e.message}`);
     return [];

@@ -334,7 +334,17 @@ async function ensureHLS(song) {
     writeMasterPlaylist(dir, trackCount);
     buildErrors.delete(id);
 
-    const p = buildHLS(song, dir)
+    const p = (async () => {
+      // 若为 B 站歌曲且尚未下载完成，先异步下载到本地缓存
+      if (song.filename && song.filename.startsWith('bilibili:') && (!song.filepath || !fs.existsSync(song.filepath))) {
+        const parts = song.filename.split(':');
+        const bvid = parts[1];
+        const cid = parts[2];
+        const { downloadBilibiliVideo } = require('./bilibili');
+        song.filepath = await downloadBilibiliVideo(bvid, cid, config.BILI_CACHE_DIR);
+      }
+      return buildHLS(song, dir);
+    })()
       .catch(e => { buildErrors.set(id, e); throw e; })
       .finally(() => building.delete(id));
     building.set(id, p);
@@ -346,7 +356,7 @@ async function ensureHLS(song) {
 // 等待某个具体文件（子播放列表或分片）出现，供路由层在文件"还在转码中、
 // 暂时不存在"时短暂轮询，而不是立刻 404 或者反过来等整首歌转完。
 // 一旦文件出现就立刻 resolve，做到"随出随响应"。
-function waitForFile(filepath, songId, { timeoutMs = 60000, intervalMs = 200 } = {}) {
+function waitForFile(filepath, songId, { timeoutMs = 120000, intervalMs = 200 } = {}) {
   return new Promise((resolve, reject) => {
     const deadline = Date.now() + timeoutMs;
     (function poll() {

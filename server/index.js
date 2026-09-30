@@ -327,20 +327,6 @@ app.get('/hls/:id/master.m3u8', async (req, res) => {
   const song = db.prepare('SELECT * FROM songs WHERE id = ?').get(req.params.id);
   if (!song) return res.status(404).end();
 
-  // 若为 B 站歌曲，确保已下载到本地缓存目录
-  if (song.filename && song.filename.startsWith('bilibili:')) {
-    const parts = song.filename.split(':');
-    const bvid = parts[1];
-    const cid = parts[2];
-    try {
-      song.filepath = await downloadBilibiliVideo(bvid, cid, config.BILI_CACHE_DIR);
-    } catch(err) {
-      log.error('HLS', `B站歌曲下载异常: ${err.message}`);
-      return res.status(502).end();
-    }
-  }
-
-  if (!fs.existsSync(song.filepath)) return res.status(404).end();
   log.info('HLS', `请求播放 master.m3u8: id=${song.id} "${song.title || song.filename}"`);
   try {
     const m3u8Path = await ensureHLS(song);
@@ -498,7 +484,7 @@ app.get('/api/bilibili/history', (req, res) => {
     FROM songs s
     WHERE s.filename LIKE 'bilibili:%'
     ORDER BY last_time DESC, s.id DESC
-    LIMIT 50
+    LIMIT 10
   `).all();
   res.json(rows);
 });

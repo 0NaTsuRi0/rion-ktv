@@ -281,25 +281,43 @@ biliInput.oninput = () => {
 function toast(m){ if(typeof showToast === 'function') showToast(m); else alert(m); }
 
 let biliSearching = false;
-async function doBiliSearch() {
+let biliCurrentPage = 1;
+
+async function doBiliSearch(page = 1) {
   const q = biliInput.value.trim();
   if(!q) return loadBiliHistory();
   if(biliSearching) return;
   biliSearching = true;
-  biliList.innerHTML = '';
-  biliEmpty.style.display = 'none';
-  biliLoading.style.display = 'block';
+  biliCurrentPage = page;
+
+  if (page === 1) {
+    biliList.innerHTML = '';
+    biliEmpty.style.display = 'none';
+    biliLoading.style.display = 'block';
+  }
+
+  const oldMoreBtn = document.getElementById('bili-load-more');
+  if (oldMoreBtn) oldMoreBtn.remove();
 
   try {
-    const res = await fetch('/api/bilibili/search?q=' + encodeURIComponent(q));
+    const res = await fetch(`/api/bilibili/search?q=${encodeURIComponent(q)}&page=${page}`);
     const list = await res.json();
     biliLoading.style.display = 'none';
-    if(!list || !list.length) {
+    if(page === 1 && (!list || !list.length)) {
       biliEmpty.style.display = 'block';
       biliEmpty.textContent = '未找到相关B站视频';
       return;
     }
-    renderBiliResults(list);
+    renderBiliResults(list, page > 1);
+
+    if (list && list.length === 10) {
+      const moreBtn = document.createElement('button');
+      moreBtn.id = 'bili-load-more';
+      moreBtn.style.cssText = 'width:100%;margin:12px 0 24px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);color:#fff;font-size:13px;font-weight:600;padding:12px;border-radius:10px;cursor:pointer;display:block';
+      moreBtn.textContent = `加载更多 (第 ${page + 1} 页)`;
+      moreBtn.onclick = () => doBiliSearch(page + 1);
+      biliList.appendChild(moreBtn);
+    }
   } catch(e) {
     biliLoading.style.display = 'none';
     showToast('搜索失败: ' + e.message);
@@ -360,8 +378,8 @@ function renderBiliHistory(list) {
   });
 }
 
-function renderBiliResults(list) {
-  biliList.innerHTML = '';
+function renderBiliResults(list, append = false) {
+  if (!append) biliList.innerHTML = '';
   list.forEach(v => {
     const card = document.createElement('div');
     card.className = 'song-card';
@@ -377,7 +395,6 @@ function renderBiliResults(list) {
       </div>
       <button class="btn-add" style="background:#fb7299;flex-shrink:0;box-shadow:0 3px 10px rgba(251,114,153,.4)" title="点歌">＋</button>
     `;
-    // 点击整张卡片或者加号都能直接触发
     card.onclick = () => onBiliVideoClick(v);
     biliList.appendChild(card);
   });
