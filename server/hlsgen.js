@@ -115,9 +115,11 @@ function isFresh(id, srcPath, accPath) {
   const marker = completeMarkerPath(id);
   if (!fs.existsSync(marker)) return false;
   try {
-    const srcStat = fs.statSync(srcPath);
     const outStat = fs.statSync(marker);
-    if (outStat.mtimeMs < srcStat.mtimeMs) return false;
+    if (srcPath && fs.existsSync(srcPath)) {
+      const srcStat = fs.statSync(srcPath);
+      if (outStat.mtimeMs < srcStat.mtimeMs) return false;
+    }
     // 如果有伴奏文件，也检查它是否比缓存新
     if (accPath && fs.existsSync(accPath)) {
       const accStat = fs.statSync(accPath);
@@ -332,7 +334,8 @@ async function buildBiliHLS(bvid, cid, dir, songTag, songId) {
       '-c:v', 'copy',
       '-c:a', 'copy',
       '-f', 'hls',
-      '-hls_time', '4',
+      '-hls_time', '10',
+      '-hls_list_size', '0',
       '-hls_playlist_type', 'event',
       '-hls_flags', 'independent_segments',
       '-hls_segment_filename', path.join(dir, 'seg_%04d.ts'),
@@ -347,7 +350,8 @@ async function buildBiliHLS(bvid, cid, dir, songTag, songId) {
       '-i', playInfo.url,
       '-c', 'copy',
       '-f', 'hls',
-      '-hls_time', '4',
+      '-hls_time', '10',
+      '-hls_list_size', '0',
       '-hls_playlist_type', 'event',
       '-hls_flags', 'independent_segments',
       '-hls_segment_filename', path.join(dir, 'seg_%04d.ts'),

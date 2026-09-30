@@ -262,12 +262,12 @@ function loadSong(songId, track){
     const sourceUrl = '/hls/'+songId+'/master.m3u8?t='+Date.now();
     hls=new Hls({
       startLevel:0,
-      lowBufferWatchdogPeriod:0.5,
-      maxBufferLength:2,
-      maxMaxBufferLength:5,
-      backbufferLength:0,
+      lowBufferWatchdogPeriod:1,
+      maxBufferLength:30,
+      maxMaxBufferLength:60,
+      backbufferLength:30,
       startFragPrefetch:true,
-      appendErrorMaxRetry:3,
+      appendErrorMaxRetry:5,
       startPosition:0,
       autoStartLoad:true,
       manifestLoadingTimeOut:60000,
