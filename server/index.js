@@ -11,7 +11,7 @@ const { config } = require('./config');
 const { scanLibrary, rescanLibrary, MV_DIR } = require('./scanner');
 const { ensureHLS, removeHLS, outDir, waitForFile, scheduleHLSCleanup } = require('./hlsgen');
 const { getWatcherStatus } = require('./watcher');
-const { searchBilibili, getBilibiliParts, proxyBilibiliStream, proxyImage, downloadBilibiliVideo } = require('./bilibili');
+const { searchBilibili, getBilibiliParts, proxyBilibiliStream, proxyImage, saveRemoteImage, downloadBilibiliVideo } = require('./bilibili');
 
 // 伴奏文件存在性缓存（避免每次请求都查磁盘）
 let accCache = { timestamp: 0, valid: new Set() };
@@ -208,15 +208,25 @@ app.get('/api/cover/:id', (req, res) => {
   const DEFAULTS = path.join(__dirname, '../web/icons');
   const song = db.prepare('SELECT * FROM songs WHERE id = ?').get(req.params.id);
   if (song) {
-    // 支持远程网络封面（如 B 站歌曲）
-    if (song.cover && song.cover.startsWith('http')) {
-      return proxyImage(song.cover, res);
-    }
-    if (song.filepath && !song.filepath.startsWith('bilibili:')) {
-      const coverPath = path.join(path.dirname(song.filepath), 'cover.jpg');
-      if (fs.existsSync(coverPath)) {
+    const isBili = (song.filename && song.filename.startsWith('bilibili:'));
+    if (isBili) {
+      const parts = song.filename.split(':');
+      const bvid = parts[1];
+      const localCover = path.join(config.BILI_CACHE_DIR, `${bvid}_cover.jpg`);
+      if (fs.existsSync(localCover) && fs.statSync(localCover).size > 0) {
         res.set({ 'Cache-Control': 'public, max-age=86400' });
-        return res.sendFile(coverPath);
+        return res.sendFile(localCover);
+      }
+      if (song.cover && song.cover.startsWith('http')) {
+        return proxyImage(song.cover, res, localCover);
+      }
+    } else {
+      if (song.filepath) {
+        const coverPath = path.join(path.dirname(song.filepath), 'cover.jpg');
+        if (fs.existsSync(coverPath)) {
+          res.set({ 'Cache-Control': 'public, max-age=86400' });
+          return res.sendFile(coverPath);
+        }
       }
     }
   }
@@ -519,6 +529,12 @@ app.post('/api/bilibili/enqueue', (req, res) => {
       // 同步最新复合标题、本地缓存路径与封面
       db.prepare("UPDATE songs SET title = ?, filepath = ?, cover = COALESCE(NULLIF(cover, ''), ?) WHERE id = ?")
         .run(displayTitle, targetFilePath, pic || '', song.id);
+    }
+
+    // 后台立即缓存 B 站封面到本地磁盘，保证后续秒开且不丢失
+    if (pic && pic.startsWith('http')) {
+      const localCover = path.join(config.BILI_CACHE_DIR, `${bvid}_cover.jpg`);
+      saveRemoteImage(pic, localCover).catch(() => {});
     }
 
     // 后台立即触发 HLS 快速预热切片（实测首分片 2~3 秒生成，随出随播）

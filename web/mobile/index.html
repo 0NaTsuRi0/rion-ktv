@@ -173,7 +173,7 @@ body{margin:0;min-height:100vh;overflow-x:hidden;background:radial-gradient(circ
 <!-- ===== 遥控 tab ===== -->
 <div id="tab-remote" class="content">
   <div id="now-bar">
-    <img id="nb-cover" src="" style="width:40px;height:40px;border-radius:8px;object-fit:cover;flex-shrink:0;background:rgba(255,255,255,.06)" onerror="this.style.display='none'">
+    <img id="nb-cover" src="/icons/album.svg" referrerpolicy="no-referrer" style="width:40px;height:40px;border-radius:8px;object-fit:cover;flex-shrink:0;background:rgba(255,255,255,.06)" onerror="this.src='/icons/album.svg'">
     <div class="nb-info">
       <div class="nb-title" id="nb-title">暂无播放</div>
       <div class="nb-meta" id="nb-meta">—</div>
@@ -544,12 +544,20 @@ function onQueue(){
     document.getElementById('nb-title').textContent=p.title;
     document.getElementById('nb-meta').textContent=(p.artist||'')+' · '+p.nickname;
     document.getElementById('nb-status').textContent='♪ 播放中';
-    var nc=document.getElementById('nb-cover');nc.src='/api/cover/'+p.song_id;nc.style.display='';
+    var nc=document.getElementById('nb-cover');
+    const newCover = '/api/cover/'+p.song_id+'?t='+(p.queue_id||p.song_id);
+    if(nc.getAttribute('data-song')!==String(p.song_id)){
+      nc.setAttribute('data-song',String(p.song_id));
+      nc.src = newCover;
+    }
+    nc.style.display='';
   }else{
     document.getElementById('nb-title').textContent='暂无播放';
     document.getElementById('nb-meta').textContent='—';
     document.getElementById('nb-status').textContent='';
-    document.getElementById('nb-cover').style.display='none';
+    var nc=document.getElementById('nb-cover');
+    nc.removeAttribute('data-song');
+    nc.style.display='none';
   }
 }
 
@@ -715,7 +723,7 @@ function renderQueue(){
     var row=document.createElement('div');
     row.className='q-row'+(q.status==='playing'?' playing':'');
     row.innerHTML='<div class="q-num">'+(q.status==='playing'?'♪':i+1)+'</div>'
-      +'<img src="/api/cover/'+q.song_id+'" style="width:32px;height:32px;border-radius:6px;object-fit:cover;flex-shrink:0" onerror="this.style.display=\'none\'">'
+      +'<img src="/api/cover/'+q.song_id+'?t='+(q.queue_id||q.song_id)+'" referrerpolicy="no-referrer" style="width:32px;height:32px;border-radius:6px;object-fit:cover;flex-shrink:0" onerror="this.src=\'/icons/album.svg\'">'
       +'<div class="q-info"><div class="q-title">'+esc(q.title)+'</div><div class="q-meta">'+esc(q.artist||'')+' · '+esc(q.nickname||'')+'</div></div>'
       +'<div class="q-acts">'
       +(q.status==='playing'

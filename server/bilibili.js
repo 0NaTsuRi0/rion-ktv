@@ -437,8 +437,57 @@ async function proxyBilibiliStream(req, res, bvid, cid) {
   }
 }
 
-// 代理获取 B 站封面图片（防盗链 Referer 处理及 302 重定向跟随，带连接池防挂断）
-function proxyImage(imgUrl, res, redirectCount = 0) {
+// 下载远程图片并保存到本地
+function saveRemoteImage(imgUrl, savePath, redirectCount = 0) {
+  return new Promise((resolve) => {
+    if (!imgUrl || typeof imgUrl !== 'string' || !imgUrl.startsWith('http') || redirectCount > 3) {
+      return resolve(false);
+    }
+    if (fs.existsSync(savePath) && fs.statSync(savePath).size > 0) {
+      return resolve(true);
+    }
+    try {
+      const targetUrl = new URL(imgUrl);
+      const client = targetUrl.protocol === 'https:' ? https : http;
+      const agent = targetUrl.protocol === 'https:' ? httpsAgent : httpAgent;
+
+      const req = client.get(imgUrl, {
+        agent,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Referer': 'https://www.bilibili.com/'
+        }
+      }, res => {
+        if ([301, 302, 307, 308].includes(res.statusCode) && res.headers.location) {
+          let nextUrl = res.headers.location;
+          if (nextUrl.startsWith('//')) nextUrl = targetUrl.protocol + nextUrl;
+          return resolve(saveRemoteImage(nextUrl, savePath, redirectCount + 1));
+        }
+        if (res.statusCode === 200) {
+          const out = fs.createWriteStream(savePath);
+          res.pipe(out);
+          out.on('finish', () => resolve(true));
+          out.on('error', () => {
+            try { fs.unlinkSync(savePath); } catch(e) {}
+            resolve(false);
+          });
+        } else {
+          resolve(false);
+        }
+      });
+      req.on('error', () => resolve(false));
+      req.setTimeout(8000, () => {
+        req.destroy();
+        resolve(false);
+      });
+    } catch(e) {
+      resolve(false);
+    }
+  });
+}
+
+// 代理获取 B 站封面图片（防盗链 Referer 处理及 302 重定向跟随，带连接池与本地落盘缓存）
+function proxyImage(imgUrl, res, savePath = null, redirectCount = 0) {
   const defaultSvg = path.join(__dirname, '../web/icons/album.svg');
   if (!imgUrl || typeof imgUrl !== 'string' || !imgUrl.startsWith('http')) {
     return res.sendFile(defaultSvg);
@@ -462,7 +511,7 @@ function proxyImage(imgUrl, res, redirectCount = 0) {
       if ([301, 302, 307, 308].includes(proxyRes.statusCode) && proxyRes.headers.location) {
         let nextUrl = proxyRes.headers.location;
         if (nextUrl.startsWith('//')) nextUrl = targetUrl.protocol + nextUrl;
-        return proxyImage(nextUrl, res, redirectCount + 1);
+        return proxyImage(nextUrl, res, savePath, redirectCount + 1);
       }
       if (proxyRes.statusCode === 200) {
         res.set({
@@ -470,6 +519,13 @@ function proxyImage(imgUrl, res, redirectCount = 0) {
           'Cache-Control': 'public, max-age=86400'
         });
         proxyRes.pipe(res);
+        if (savePath) {
+          try {
+            const fileOut = fs.createWriteStream(savePath);
+            proxyRes.pipe(fileOut);
+            fileOut.on('error', () => {});
+          } catch(e) {}
+        }
         proxyRes.on('error', () => {
           if (!res.headersSent) res.sendFile(defaultSvg);
         });
@@ -500,5 +556,6 @@ module.exports = {
   getPlayUrl,
   proxyBilibiliStream,
   proxyImage,
+  saveRemoteImage,
   downloadBilibiliVideo
 };
