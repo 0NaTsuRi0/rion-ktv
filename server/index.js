@@ -461,9 +461,9 @@ app.post('/api/bilibili/enqueue', (req, res) => {
     const key = `bilibili:${bvid}:${cid}`;
     let song = db.prepare('SELECT id FROM songs WHERE filename = ?').get(key);
     if (!song) {
-      const displayTitle = partTitle && partTitle !== videoTitle ? `${videoTitle} - ${partTitle}` : (partTitle || videoTitle || bvid);
+      const displayTitle = (partTitle && partTitle.trim()) ? partTitle.trim() : (videoTitle || bvid);
       const displayArtist = author ? `B站 · ${author}` : 'B站';
-      const sec = typeof duration === 'number' ? duration : 0;
+      const sec = parseInt(duration) || 0;
       const info = db.prepare(`
         INSERT INTO songs (title, artist, filename, filepath, cover, duration, audio_tracks)
         VALUES (?, ?, ?, ?, ?, ?, 1)

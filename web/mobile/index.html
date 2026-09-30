@@ -206,14 +206,17 @@ body{margin:0;min-height:100vh;overflow-x:hidden;background:radial-gradient(circ
 <div id="toast"></div>
 
 <!-- B 站分 P 选择弹窗 -->
-<div id="bili-modal-overlay" style="position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.75);display:none;align-items:flex-end;justify-content:center" onclick="closeBiliModal()">
-  <div id="bili-modal" style="background:#141432;border-top-left-radius:20px;border-top-right-radius:20px;width:100%;max-width:500px;max-height:75vh;display:flex;flex-direction:column;border:1px solid rgba(255,255,255,.1);box-shadow:0 -10px 40px rgba(0,0,0,.6);overflow:hidden" onclick="event.stopPropagation()">
+<div id="bili-modal-overlay" style="position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.75);display:none;align-items:flex-end;justify-content:center" onclick="closeBiliModal()">
+  <div id="bili-modal" style="background:#141432;border-top-left-radius:20px;border-top-right-radius:20px;width:100%;max-width:500px;max-height:80vh;display:flex;flex-direction:column;border:1px solid rgba(255,255,255,.1);box-shadow:0 -10px 40px rgba(0,0,0,.6);overflow:hidden" onclick="event.stopPropagation()">
     <div style="padding:14px 16px;border-bottom:1px solid rgba(255,255,255,.08);display:flex;align-items:center;justify-content:space-between">
       <div style="flex:1;min-width:0;padding-right:10px">
         <div style="font-size:15px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" id="bm-title">选择分 P 歌曲</div>
         <div style="font-size:11px;color:var(--sub);margin-top:2px" id="bm-sub">共 0 个分P</div>
       </div>
       <button onclick="closeBiliModal()" style="background:none;border:none;color:var(--sub);font-size:22px;cursor:pointer;padding:0 6px">×</button>
+    </div>
+    <div style="padding:8px 14px;border-bottom:1px solid rgba(255,255,255,.05);background:rgba(255,255,255,.02)">
+      <input id="bm-filter" placeholder="🔍 快速搜索分P歌名..." oninput="filterModalParts(this.value)" style="width:100%;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.09);border-radius:10px;padding:8px 12px;color:var(--text);font-size:13px;outline:none">
     </div>
     <div id="bm-list" style="overflow-y:auto;padding:10px 14px 20px;display:flex;flex-direction:column;gap:8px"></div>
   </div>
@@ -267,10 +270,13 @@ const biliLoading = document.getElementById('bili-loading');
 biliBtn.onclick = () => doBiliSearch();
 biliInput.onkeydown = e => { if(e.key === 'Enter') doBiliSearch(); };
 
+// 提示函数兼容
+function toast(m){ if(typeof showToast === 'function') showToast(m); else alert(m); }
+
 let biliSearching = false;
 async function doBiliSearch() {
   const q = biliInput.value.trim();
-  if(!q) return toast('请输入搜索关键词');
+  if(!q) return showToast('请输入搜索关键词');
   if(biliSearching) return;
   biliSearching = true;
   biliList.innerHTML = '';
@@ -289,7 +295,7 @@ async function doBiliSearch() {
     renderBiliResults(list);
   } catch(e) {
     biliLoading.style.display = 'none';
-    toast('搜索失败: ' + e.message);
+    showToast('搜索失败: ' + e.message);
   } finally {
     biliSearching = false;
   }
@@ -300,69 +306,95 @@ function renderBiliResults(list) {
   list.forEach(v => {
     const card = document.createElement('div');
     card.className = 'song-card';
-    card.style.alignItems = 'center';
+    card.style.cssText = 'align-items:center;cursor:pointer;position:relative';
     card.innerHTML = `
-      <img src="${esc(v.pic)}" style="width:60px;height:42px;border-radius:6px;object-fit:cover;flex-shrink:0" onerror="this.src='/icons/album.svg'">
-      <div class="info">
-        <div class="title" style="white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.3;font-size:13px">${esc(v.title)}</div>
-        <div class="artist" style="margin-top:4px">UP: ${esc(v.author)} · ${esc(v.duration)}</div>
+      <img src="${esc(v.pic)}" style="width:68px;height:48px;border-radius:8px;object-fit:cover;flex-shrink:0" onerror="this.src='/icons/album.svg'">
+      <div class="info" style="margin-left:2px">
+        <div class="title" style="white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.35;font-size:13px;font-weight:600">${esc(v.title)}</div>
+        <div class="artist" style="margin-top:4px;display:flex;align-items:center;gap:6px">
+          <span>UP: ${esc(v.author)}</span>
+          <span>⏱ ${esc(v.duration)}</span>
+        </div>
       </div>
-      <button class="btn-add" style="background:#fb7299;flex-shrink:0" title="点歌">＋</button>
+      <button class="btn-add" style="background:#fb7299;flex-shrink:0;box-shadow:0 3px 10px rgba(251,114,153,.4)" title="点歌">＋</button>
     `;
-    card.querySelector('.btn-add').onclick = () => onBiliVideoClick(v);
+    // 点击整张卡片或者加号都能直接触发
+    card.onclick = () => onBiliVideoClick(v);
     biliList.appendChild(card);
   });
 }
 
 async function onBiliVideoClick(video) {
-  toast('正在读取分P信息...');
+  showToast('正在解析分P...');
   try {
     const res = await fetch('/api/bilibili/parts?bvid=' + encodeURIComponent(video.bvid));
     const parts = await res.json();
     if(!parts || !parts.length) {
-      return toast('无法获取该视频分P');
+      return showToast('无法获取该视频分P');
     }
     if(parts.length === 1) {
-      // 单 P 直接点歌
+      // 单 P 视频直接加入队列
       await enqueueBiliSong(video, parts[0]);
     } else {
-      // 多 P 弹窗选择
+      // 多 P 合集弹窗供点歌人精确选择
       openBiliModal(video, parts);
     }
   } catch(e) {
-    toast('读取失败: ' + e.message);
+    showToast('读取失败: ' + e.message);
   }
 }
 
+let currentModalParts = [];
+let currentModalVideo = null;
+
 function openBiliModal(video, parts) {
+  currentModalVideo = video;
+  currentModalParts = parts;
+
   const overlay = document.getElementById('bili-modal-overlay');
   const title = document.getElementById('bm-title');
   const sub = document.getElementById('bm-sub');
-  const listEl = document.getElementById('bm-list');
 
   title.textContent = video.title;
-  sub.textContent = `UP: ${video.author} · 共 ${parts.length} 个分P（点击直接点歌）`;
-  listEl.innerHTML = '';
+  sub.textContent = `UP: ${video.author} · 本视频包含 ${parts.length} 个分P合集`;
+  const filterInput = document.getElementById('bm-filter');
+  if(filterInput) filterInput.value = '';
 
+  renderModalPartsList(parts);
+  overlay.style.display = 'flex';
+}
+
+function renderModalPartsList(parts) {
+  const listEl = document.getElementById('bm-list');
+  listEl.innerHTML = '';
+  if(!parts.length) {
+    listEl.innerHTML = '<div style="text-align:center;color:var(--sub);padding:20px">没有匹配的分P</div>';
+    return;
+  }
   parts.forEach(p => {
     const row = document.createElement('div');
-    row.style.cssText = 'background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;gap:8px';
+    row.style.cssText = 'background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:11px 14px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;gap:8px;transition:.15s';
     const durMin = p.duration ? Math.floor(p.duration/60) + ':' + String(p.duration%60).padStart(2,'0') : '';
     row.innerHTML = `
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">P${p.page}. ${esc(p.part)}</div>
-        <div style="font-size:11px;color:var(--sub);margin-top:2px">${durMin}</div>
+        <div style="font-size:11px;color:var(--sub);margin-top:2px">时长: ${durMin}</div>
       </div>
-      <button style="background:#fb7299;color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;flex-shrink:0">点这首</button>
+      <button style="background:#fb7299;color:#fff;border:none;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;flex-shrink:0;box-shadow:0 2px 8px rgba(251,114,153,.3)">点歌</button>
     `;
     row.onclick = async () => {
       closeBiliModal();
-      await enqueueBiliSong(video, p);
+      await enqueueBiliSong(currentModalVideo, p);
     };
     listEl.appendChild(row);
   });
+}
 
-  overlay.style.display = 'flex';
+function filterModalParts(keyword) {
+  const kw = (keyword || '').trim().toLowerCase();
+  if(!kw) return renderModalPartsList(currentModalParts);
+  const filtered = currentModalParts.filter(p => (p.part || '').toLowerCase().includes(kw) || String(p.page).includes(kw));
+  renderModalPartsList(filtered);
 }
 
 function closeBiliModal() {
@@ -371,6 +403,7 @@ function closeBiliModal() {
 
 async function enqueueBiliSong(video, part) {
   const nick = nicknameInput.value.trim() || '匿名用户';
+  showToast('正在点歌入队...');
   try {
     const res = await fetch('/api/bilibili/enqueue', {
       method: 'POST',
@@ -388,12 +421,14 @@ async function enqueueBiliSong(video, part) {
     });
     const d = await res.json();
     if(d.ok) {
-      toast('✅ 已加入队列: ' + (part.part || video.title));
+      showToast('🎶 已点: ' + (part.part || video.title));
+      // 切换到底部列表标签让点歌人确认已入队
+      if(typeof renderQueue === 'function') renderQueue();
     } else {
-      toast('点歌失败: ' + (d.error || '未知错误'));
+      showToast('点歌失败: ' + (d.error || '未知错误'));
     }
   } catch(e) {
-    toast('网络异常: ' + e.message);
+    showToast('网络异常: ' + e.message);
   }
 }
 
