@@ -971,3 +971,11 @@ wss.on('connection', ws => {
 
   scheduleHLSCleanup(() => db.prepare('SELECT id FROM songs').all().map(r => r.id));
 })();
+
+process.on('unhandledRejection', (reason) => {
+  log.warn('SYSTEM', `未处理的 Promise 拒绝: ${reason && (reason.stack || reason.message || reason)}`);
+});
+process.on('uncaughtException', (err) => {
+  log.error('SYSTEM', `捕获到全局异常: ${err && (err.stack || err.message || err)}`);
+});
+

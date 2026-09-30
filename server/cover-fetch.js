@@ -131,7 +131,7 @@ function downloadFile(url, dest) {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(dest);
     const getter = url.startsWith('https') ? https.get : http.get;
-    getter(url, res => {
+    const req = getter(url, { agent: false }, res => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         // 重定向
         downloadFile(res.headers.location, dest).then(resolve).catch(reject);
@@ -139,8 +139,15 @@ function downloadFile(url, dest) {
       }
       if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}`)); return; }
       res.pipe(file);
+      res.on('error', reject);
       file.on('finish', () => { file.close(); resolve(); });
-    }).on('error', reject);
+      file.on('error', reject);
+    });
+    req.on('error', reject);
+    req.setTimeout(10000, () => {
+      req.destroy();
+      reject(new Error('Download timeout'));
+    });
   });
 }
 

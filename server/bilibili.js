@@ -8,6 +8,62 @@ const { spawn } = require('child_process');
 const { config } = require('./config');
 const log = require('./logger');
 
+// 使用 keepAlive: false 的独立 Agent，避免 Node 连接池复用被 B 站 CDN 提前关闭的空闲 Socket 导致 ECONNRESET (socket hang up)
+const httpsAgent = new https.Agent({ keepAlive: false, timeout: 10000 });
+const httpAgent = new http.Agent({ keepAlive: false, timeout: 10000 });
+
+// 带连接重试的底层 HTTP 请求封装
+function httpGetWithRetry(url, options = {}, maxRetries = 2) {
+  return new Promise((resolve, reject) => {
+    let attempts = 0;
+
+    function attempt() {
+      attempts++;
+      const isHttps = url.startsWith('https:');
+      const client = isHttps ? https : http;
+      const opts = {
+        agent: isHttps ? httpsAgent : httpAgent,
+        ...options
+      };
+
+      const req = client.get(url, opts, res => {
+        let d = '';
+        res.on('data', c => d += c);
+        res.on('end', () => resolve({ statusCode: res.statusCode, headers: res.headers, body: d }));
+        res.on('error', err => {
+          if (attempts <= maxRetries && (err.code === 'ECONNRESET' || err.message.includes('socket hang up') || err.code === 'ETIMEDOUT')) {
+            log.warn('BILI', `数据流接收异常 (${err.message})，重试第 ${attempts}/${maxRetries} 次: ${url.slice(0, 60)}`);
+            setTimeout(attempt, 300);
+          } else {
+            reject(err);
+          }
+        });
+      });
+
+      req.on('error', err => {
+        if (attempts <= maxRetries && (err.code === 'ECONNRESET' || err.message.includes('socket hang up') || err.code === 'ETIMEDOUT')) {
+          log.warn('BILI', `连接中断 (${err.message})，重试第 ${attempts}/${maxRetries} 次: ${url.slice(0, 60)}`);
+          setTimeout(attempt, 300);
+        } else {
+          reject(err);
+        }
+      });
+
+      req.setTimeout(options.timeout || 10000, () => {
+        req.destroy();
+        if (attempts <= maxRetries) {
+          log.warn('BILI', `请求超时，重试第 ${attempts}/${maxRetries} 次: ${url.slice(0, 60)}`);
+          setTimeout(attempt, 300);
+        } else {
+          reject(new Error(`Request timeout (${url})`));
+        }
+      });
+    }
+
+    attempt();
+  });
+}
+
 const mixinKeyEncTab = [
   46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
   33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40,
@@ -25,44 +81,32 @@ let cachedWbi = {
   expiresAt: 0
 };
 
-function fetchWbiKeys() {
-  return new Promise((resolve, reject) => {
-    const now = Date.now();
-    if (cachedWbi.mixinKey && cachedWbi.expiresAt > now) {
-      return resolve(cachedWbi.mixinKey);
-    }
-    const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Referer': 'https://www.bilibili.com/'
-    };
-    if (config.BILI_COOKIE) {
-      headers['Cookie'] = config.BILI_COOKIE;
-    }
-    const req = https.get('https://api.bilibili.com/x/web-interface/nav', { headers }, res => {
-      let d = '';
-      res.on('data', c => d += c);
-      res.on('end', () => {
-        try {
-          const j = JSON.parse(d);
-          if (!j.data || !j.data.wbi_img) {
-            return reject(new Error('获取 WBI 签名密钥失败: 无 wbi_img 数据'));
-          }
-          const img = j.data.wbi_img.img_url.split('/').pop().split('.')[0];
-          const sub = j.data.wbi_img.sub_url.split('/').pop().split('.')[0];
-          const mixin = getMixinKey(img + sub);
-          cachedWbi = {
-            mixinKey: mixin,
-            expiresAt: now + 12 * 3600 * 1000 // 缓存 12 小时
-          };
-          resolve(mixin);
-        } catch(e) {
-          reject(e);
-        }
-      });
-    });
-    req.on('error', reject);
-    req.setTimeout(8000, () => { req.destroy(); reject(new Error('WBI key fetch timeout')); });
-  });
+async function fetchWbiKeys() {
+  const now = Date.now();
+  if (cachedWbi.mixinKey && cachedWbi.expiresAt > now) {
+    return cachedWbi.mixinKey;
+  }
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Referer': 'https://www.bilibili.com/'
+  };
+  if (config.BILI_COOKIE) {
+    headers['Cookie'] = config.BILI_COOKIE;
+  }
+
+  const { body } = await httpGetWithRetry('https://api.bilibili.com/x/web-interface/nav', { headers });
+  const j = JSON.parse(body);
+  if (!j.data || !j.data.wbi_img) {
+    throw new Error('获取 WBI 签名密钥失败: 无 wbi_img 数据');
+  }
+  const img = j.data.wbi_img.img_url.split('/').pop().split('.')[0];
+  const sub = j.data.wbi_img.sub_url.split('/').pop().split('.')[0];
+  const mixin = getMixinKey(img + sub);
+  cachedWbi = {
+    mixinKey: mixin,
+    expiresAt: now + 12 * 3600 * 1000 // 缓存 12 小时
+  };
+  return mixin;
 }
 
 // 搜索 B 站视频
@@ -88,81 +132,59 @@ async function searchBilibili(keyword, page = 1) {
 
   const searchUrl = 'https://api.bilibili.com/x/web-interface/wbi/search/type?' + queryStr + '&w_rid=' + w_rid;
 
-  return new Promise((resolve, reject) => {
-    const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Referer': 'https://www.bilibili.com/'
-    };
-    if (config.BILI_COOKIE) {
-      headers['Cookie'] = config.BILI_COOKIE;
-    } else {
-      headers['Cookie'] = 'buvid3=xx;';
-    }
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Referer': 'https://www.bilibili.com/',
+    'Cookie': config.BILI_COOKIE || 'buvid3=xx;'
+  };
 
-    const req = https.get(searchUrl, { headers }, res => {
-      let d = '';
-      res.on('data', c => d += c);
-      res.on('end', () => {
-        try {
-          const j = JSON.parse(d);
-          if (j.code !== 0 || !j.data || !j.data.result) {
-            log.warn('BILI', `搜索无结果或提示 code=${j.code}: ${j.message}`);
-            return resolve([]);
-          }
-          const list = (j.data.result || []).map(r => ({
-            bvid: r.bvid,
-            title: r.title.replace(/<[^>]+>/g, ''), // 去除高亮 <em> 标签
-            author: r.author,
-            pic: r.pic.startsWith('http') ? r.pic : 'https:' + r.pic,
-            duration: r.duration,
-            play: r.play
-          }));
-          resolve(list);
-        } catch(e) {
-          reject(e);
-        }
-      });
-    });
-    req.on('error', reject);
-    req.setTimeout(10000, () => { req.destroy(); reject(new Error('Search timeout')); });
-  });
+  try {
+    const { body } = await httpGetWithRetry(searchUrl, { headers });
+    const j = JSON.parse(body);
+    if (j.code !== 0 || !j.data || !j.data.result) {
+      log.warn('BILI', `搜索无结果或提示 code=${j.code}: ${j.message}`);
+      return [];
+    }
+    const list = (j.data.result || []).map(r => ({
+      bvid: r.bvid,
+      title: r.title.replace(/<[^>]+>/g, ''), // 去除高亮 <em> 标签
+      author: r.author,
+      pic: r.pic.startsWith('http') ? r.pic : 'https:' + r.pic,
+      duration: r.duration,
+      play: r.play
+    }));
+    return list;
+  } catch(e) {
+    log.error('BILI', `搜索执行失败: ${e.message}`);
+    return [];
+  }
 }
 
 // 获取视频的分 P 列表
-function getBilibiliParts(bvid) {
-  return new Promise((resolve, reject) => {
-    const url = `https://api.bilibili.com/x/player/pagelist?bvid=${encodeURIComponent(bvid)}`;
-    const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Referer': 'https://www.bilibili.com/'
-    };
-    if (config.BILI_COOKIE) headers['Cookie'] = config.BILI_COOKIE;
+async function getBilibiliParts(bvid) {
+  const url = `https://api.bilibili.com/x/player/pagelist?bvid=${encodeURIComponent(bvid)}`;
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Referer': 'https://www.bilibili.com/'
+  };
+  if (config.BILI_COOKIE) headers['Cookie'] = config.BILI_COOKIE;
 
-    const req = https.get(url, { headers }, res => {
-      let d = '';
-      res.on('data', c => d += c);
-      res.on('end', () => {
-        try {
-          const j = JSON.parse(d);
-          if (j.code === 0 && Array.isArray(j.data)) {
-            const parts = j.data.map(p => ({
-              cid: p.cid,
-              page: p.page,
-              part: p.part || `第${p.page}P`,
-              duration: p.duration
-            }));
-            resolve(parts);
-          } else {
-            resolve([]);
-          }
-        } catch(e) {
-          reject(e);
-        }
-      });
-    });
-    req.on('error', reject);
-    req.setTimeout(8000, () => { req.destroy(); reject(new Error('Pagelist timeout')); });
-  });
+  try {
+    const { body } = await httpGetWithRetry(url, { headers });
+    const j = JSON.parse(body);
+    if (j.code === 0 && Array.isArray(j.data)) {
+      return j.data.map(p => ({
+        cid: p.cid,
+        page: p.page,
+        part: p.part || `第${p.page}P`,
+        duration: p.duration
+      }));
+    }
+    return [];
+  } catch(e) {
+    log.error('BILI', `获取分P异常: ${e.message}`);
+    return [];
+  }
 }
 
 // 缓存解析后的播放直链（短时间内同一视频无需重复请求 playurl）
@@ -200,91 +222,77 @@ async function getPlayUrl(bvid, cid) {
   const w_rid = crypto.createHash('md5').update(queryStr + mixinKey).digest('hex');
   const playUrl = 'https://api.bilibili.com/x/player/wbi/playurl?' + queryStr + '&w_rid=' + w_rid;
 
-  return new Promise((resolve, reject) => {
-    const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Referer': 'https://www.bilibili.com/'
-    };
-    if (config.BILI_COOKIE) headers['Cookie'] = config.BILI_COOKIE;
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Referer': 'https://www.bilibili.com/'
+  };
+  if (config.BILI_COOKIE) headers['Cookie'] = config.BILI_COOKIE;
 
-    const req = https.get(playUrl, { headers }, res => {
-      let d = '';
-      res.on('data', c => d += c);
-      res.on('end', () => {
-        try {
-          const j = JSON.parse(d);
-          if (j.code !== 0 || !j.data) {
-            return reject(new Error(j.message || `获取播放地址失败 code=${j.code}`));
-          }
+  const { body } = await httpGetWithRetry(playUrl, { headers });
+  const j = JSON.parse(body);
+  if (j.code !== 0 || !j.data) {
+    throw new Error(j.message || `获取播放地址失败 code=${j.code}`);
+  }
 
-          let playInfo = null;
+  let playInfo = null;
 
-          // 1. 优先提取 DASH 格式流（音视频分离）
-          if (j.data.dash) {
-            const rawVideos = j.data.dash.video || [];
-            // 优先选择 H.264/AVC 编码（广泛兼容浏览器硬解和快速 copy 切片，无 HEVC 授权与播放卡顿问题）
-            const avcVideos = rawVideos.filter(v => (v.codecs && v.codecs.startsWith('avc1')) || v.codecid === 7);
-            const candidates = avcVideos.length > 0 ? avcVideos : rawVideos;
-            candidates.sort((a, b) => (b.id - a.id) || ((b.bandwidth || 0) - (a.bandwidth || 0)));
+  // 1. 优先提取 DASH 格式流（音视频分离）
+  if (j.data.dash) {
+    const rawVideos = j.data.dash.video || [];
+    // 优先选择 H.264/AVC 编码（广泛兼容浏览器硬解和快速 copy 切片，无 HEVC 授权与播放卡顿问题）
+    const avcVideos = rawVideos.filter(v => (v.codecs && v.codecs.startsWith('avc1')) || v.codecid === 7);
+    const candidates = avcVideos.length > 0 ? avcVideos : rawVideos;
+    candidates.sort((a, b) => (b.id - a.id) || ((b.bandwidth || 0) - (a.bandwidth || 0)));
 
-            const bestVideo = candidates[0];
-            const vUrl = bestVideo ? (bestVideo.baseUrl || bestVideo.base_url || (bestVideo.backupUrl && bestVideo.backupUrl[0]) || (bestVideo.backup_url && bestVideo.backup_url[0])) : null;
+    const bestVideo = candidates[0];
+    const vUrl = bestVideo ? (bestVideo.baseUrl || bestVideo.base_url || (bestVideo.backupUrl && bestVideo.backupUrl[0]) || (bestVideo.backup_url && bestVideo.backup_url[0])) : null;
 
-            // 提取高品质音频轨
-            const audios = [...(j.data.dash.audio || [])];
-            audios.sort((a, b) => ((b.bandwidth || 0) - (a.bandwidth || 0)) || (b.id - a.id));
-            const bestAudio = audios[0];
-            const aUrl = bestAudio ? (bestAudio.baseUrl || bestAudio.base_url || (bestAudio.backupUrl && bestAudio.backupUrl[0]) || (bestAudio.backup_url && bestAudio.backup_url[0])) : null;
+    // 提取高品质音频轨
+    const audios = [...(j.data.dash.audio || [])];
+    audios.sort((a, b) => ((b.bandwidth || 0) - (a.bandwidth || 0)) || (b.id - a.id));
+    const bestAudio = audios[0];
+    const aUrl = bestAudio ? (bestAudio.baseUrl || bestAudio.base_url || (bestAudio.backupUrl && bestAudio.backupUrl[0]) || (bestAudio.backup_url && bestAudio.backup_url[0])) : null;
 
-            if (vUrl && aUrl) {
-              playInfo = {
-                type: 'dash',
-                videoUrl: vUrl,
-                audioUrl: aUrl,
-                quality: bestVideo.id,
-                codecs: bestVideo.codecs
-              };
-            } else if (vUrl) {
-              playInfo = {
-                type: 'durl',
-                url: vUrl,
-                quality: bestVideo.id
-              };
-            }
-          }
+    if (vUrl && aUrl) {
+      playInfo = {
+        type: 'dash',
+        videoUrl: vUrl,
+        audioUrl: aUrl,
+        quality: bestVideo.id,
+        codecs: bestVideo.codecs
+      };
+    } else if (vUrl) {
+      playInfo = {
+        type: 'durl',
+        url: vUrl,
+        quality: bestVideo.id
+      };
+    }
+  }
 
-          // 2. 兜底传统单流 (durl)
-          if (!playInfo && j.data.durl && j.data.durl[0]) {
-            const durl = j.data.durl[0];
-            const singleUrl = durl.url || (durl.backup_url && durl.backup_url[0]);
-            if (singleUrl) {
-              playInfo = {
-                type: 'durl',
-                url: singleUrl,
-                quality: j.data.quality
-              };
-            }
-          }
+  // 2. 兜底传统单流 (durl)
+  if (!playInfo && j.data.durl && j.data.durl[0]) {
+    const durl = j.data.durl[0];
+    const singleUrl = durl.url || (durl.backup_url && durl.backup_url[0]);
+    if (singleUrl) {
+      playInfo = {
+        type: 'durl',
+        url: singleUrl,
+        quality: j.data.quality
+      };
+    }
+  }
 
-          if (!playInfo) {
-            return reject(new Error('未找到可用的 B 站播放流'));
-          }
+  if (!playInfo) {
+    throw new Error('未找到可用的 B 站播放流');
+  }
 
-          playUrlCache.set(cacheKey, {
-            playInfo,
-            expireAt: Date.now() + 60 * 60 * 1000 // 缓存 1 小时
-          });
-
-          resolve(playInfo);
-        } catch(e) {
-          reject(e);
-        }
-      });
-    });
-
-    req.on('error', reject);
-    req.setTimeout(10000, () => { req.destroy(); reject(new Error('Playurl request timeout')); });
+  playUrlCache.set(cacheKey, {
+    playInfo,
+    expireAt: Date.now() + 60 * 60 * 1000 // 缓存 1 小时
   });
+
+  return playInfo;
 }
 
 // 下载 B 站视频到本地缓存目录（支持复用下载 Promise、DASH 音视频流快速合并封装）
@@ -428,7 +436,7 @@ async function proxyBilibiliStream(req, res, bvid, cid) {
   }
 }
 
-// 代理获取 B 站封面图片（防盗链 Referer 处理及 302 重定向跟随）
+// 代理获取 B 站封面图片（防盗链 Referer 处理及 302 重定向跟随，带连接池防挂断）
 function proxyImage(imgUrl, res, redirectCount = 0) {
   const defaultSvg = path.join(__dirname, '../web/icons/album.svg');
   if (!imgUrl || typeof imgUrl !== 'string' || !imgUrl.startsWith('http')) {
@@ -441,7 +449,10 @@ function proxyImage(imgUrl, res, redirectCount = 0) {
   try {
     const targetUrl = new URL(imgUrl);
     const client = targetUrl.protocol === 'https:' ? https : http;
-    const req = client.get(imgUrl, {
+    const agent = targetUrl.protocol === 'https:' ? httpsAgent : httpAgent;
+
+    const proxyReq = client.get(imgUrl, {
+      agent,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Referer': 'https://www.bilibili.com/'
@@ -457,17 +468,25 @@ function proxyImage(imgUrl, res, redirectCount = 0) {
           'Content-Type': proxyRes.headers['content-type'] || 'image/jpeg',
           'Cache-Control': 'public, max-age=86400'
         });
-        return proxyRes.pipe(res);
+        proxyRes.pipe(res);
+        proxyRes.on('error', () => {
+          if (!res.headersSent) res.sendFile(defaultSvg);
+        });
+        return;
       }
-      res.sendFile(defaultSvg);
+      if (!res.headersSent) res.sendFile(defaultSvg);
     });
 
-    req.on('error', () => {
+    proxyReq.on('error', () => {
       if (!res.headersSent) res.sendFile(defaultSvg);
     });
-    req.setTimeout(6000, () => {
-      req.destroy();
+    proxyReq.setTimeout(8000, () => {
+      proxyReq.destroy();
       if (!res.headersSent) res.sendFile(defaultSvg);
+    });
+
+    res.on('close', () => {
+      if (!proxyReq.destroyed) proxyReq.destroy();
     });
   } catch (e) {
     if (!res.headersSent) res.sendFile(defaultSvg);
