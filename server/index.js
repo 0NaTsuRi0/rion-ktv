@@ -521,13 +521,11 @@ app.post('/api/bilibili/enqueue', (req, res) => {
         .run(displayTitle, targetFilePath, pic || '', song.id);
     }
 
-    // 后台立即触发视频下载与 HLS 预热切片
-    downloadBilibiliVideo(bvid, cid, config.BILI_CACHE_DIR).then(savedPath => {
-      const fullSong = db.prepare('SELECT * FROM songs WHERE id = ?').get(song.id);
-      if (fullSong) {
-        ensureHLS(fullSong).catch(e => log.warn('HLS', `B站预切片提示: ${e.message}`));
-      }
-    }).catch(e => log.error('BILI', `后台下载B站视频失败: ${e.message}`));
+    // 后台立即触发 HLS 快速预热切片（实测首分片 2~3 秒生成，随出随播）
+    const fullSong = db.prepare('SELECT * FROM songs WHERE id = ?').get(song.id);
+    if (fullSong) {
+      ensureHLS(fullSong).catch(e => log.warn('HLS', `B站预热切片提示: ${e.message}`));
+    }
 
     const qInfo = db.prepare('INSERT INTO queue (song_id, nickname) VALUES (?, ?)').run(song.id, nickname || '匿名用户');
     db.prepare('UPDATE songs SET play_count = play_count + 1 WHERE id = ?').run(song.id);

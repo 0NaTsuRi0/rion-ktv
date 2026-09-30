@@ -312,10 +312,58 @@ async function buildHLS(song, dir) {
   log.info('TRANSCODE', `${songTag} 全部轨道转码完成，总耗时 ${Date.now() - t0}ms`);
 }
 
+// B 站歌曲：无需耗时下载完整视频，直接由 ffmpeg 将 B 站 DASH 音视频流实时转封装为 HLS 切片（2~4秒秒开起播）
+async function buildBiliHLS(bvid, cid, dir, songTag, songId) {
+  const { getPlayUrl } = require('./bilibili');
+  const playInfo = await getPlayUrl(bvid, cid);
+  const headersStr = 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\nReferer: https://www.bilibili.com/\r\n'
+    + (config.BILI_COOKIE ? `Cookie: ${config.BILI_COOKIE}\r\n` : '');
+
+  let args = [];
+  if (playInfo.type === 'dash') {
+    log.info('TRANSCODE', `${songTag} 采用 B 站 DASH 音视频流直转 HLS 分片模式 (快速直播秒开)`);
+    args = [
+      '-loglevel', 'error',
+      '-y',
+      '-headers', headersStr,
+      '-i', playInfo.videoUrl,
+      '-headers', headersStr,
+      '-i', playInfo.audioUrl,
+      '-c:v', 'copy',
+      '-c:a', 'copy',
+      '-f', 'hls',
+      '-hls_time', '4',
+      '-hls_playlist_type', 'event',
+      '-hls_flags', 'independent_segments',
+      '-hls_segment_filename', path.join(dir, 'seg_%04d.ts'),
+      path.join(dir, 'master.m3u8')
+    ];
+  } else {
+    log.info('TRANSCODE', `${songTag} 采用 B 站单流直转 HLS 分片模式 (快速秒开)`);
+    args = [
+      '-loglevel', 'error',
+      '-y',
+      '-headers', headersStr,
+      '-i', playInfo.url,
+      '-c', 'copy',
+      '-f', 'hls',
+      '-hls_time', '4',
+      '-hls_playlist_type', 'event',
+      '-hls_flags', 'independent_segments',
+      '-hls_segment_filename', path.join(dir, 'seg_%04d.ts'),
+      path.join(dir, 'master.m3u8')
+    ];
+  }
+
+  const t0 = Date.now();
+  await runFFmpeg(args);
+  fs.writeFileSync(completeMarkerPath(songId), String(Date.now()));
+  log.info('TRANSCODE', `${songTag} B站流切片全部完成并缓存，总耗时 ${Date.now() - t0}ms`);
+}
+
 async function ensureHLS(song) {
-  const { id, filepath, accompaniment } = song;
-  const hasAcc = accompaniment && fs.existsSync(accompaniment);
-  const trackCount = hasAcc ? 2 : Math.max(1, song.audio_tracks || 1);
+  const { id, filepath, accompaniment, filename } = song;
+  const isBili = filename && filename.startsWith('bilibili:');
   const songTag = `[歌曲 id=${id} "${song.title || song.filename}"]`;
 
   if (isFresh(id, filepath, accompaniment)) {
@@ -324,31 +372,42 @@ async function ensureHLS(song) {
   }
 
   if (building.has(id)) {
-    log.info('TRANSCODE', `${songTag} 已有转码任务在后台进行中，本次请求直接复用该任务`);
+    log.info('TRANSCODE', `${songTag} 已有转码任务在后台进行中，等待播放列表就绪`);
+    await waitForFile(masterPath(id), id, { timeoutMs: 30000 });
+    return masterPath(id);
   }
 
-  if (!building.has(id)) {
-    const dir = outDir(id);
-    fs.rmSync(dir, { recursive: true, force: true });
-    fs.mkdirSync(dir, { recursive: true });
-    writeMasterPlaylist(dir, trackCount);
-    buildErrors.delete(id);
+  const dir = outDir(id);
+  if (fs.existsSync(dir)) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch(e) {}
+  }
+  fs.mkdirSync(dir, { recursive: true });
+  buildErrors.delete(id);
 
-    const p = (async () => {
-      // 若为 B 站歌曲且尚未下载完成，先异步下载到本地缓存
-      if (song.filename && song.filename.startsWith('bilibili:') && (!song.filepath || !fs.existsSync(song.filepath))) {
-        const parts = song.filename.split(':');
-        const bvid = parts[1];
-        const cid = parts[2];
-        const { downloadBilibiliVideo } = require('./bilibili');
-        song.filepath = await downloadBilibiliVideo(bvid, cid, config.BILI_CACHE_DIR);
-      }
-      return buildHLS(song, dir);
-    })()
+  if (isBili) {
+    const parts = filename.split(':');
+    const bvid = parts[1];
+    const cid = parts[2];
+
+    const p = buildBiliHLS(bvid, cid, dir, songTag, id)
       .catch(e => { buildErrors.set(id, e); throw e; })
       .finally(() => building.delete(id));
     building.set(id, p);
+
+    // 等待首分片和 master.m3u8 产出（实测仅需 2~4 秒）
+    await waitForFile(masterPath(id), id, { timeoutMs: 30000 });
+    return masterPath(id);
   }
+
+  // 本地歌曲走本地转码/切片逻辑
+  const hasAcc = accompaniment && fs.existsSync(accompaniment);
+  const trackCount = hasAcc ? 2 : Math.max(1, song.audio_tracks || 1);
+  writeMasterPlaylist(dir, trackCount);
+
+  const p = buildHLS(song, dir)
+    .catch(e => { buildErrors.set(id, e); throw e; })
+    .finally(() => building.delete(id));
+  building.set(id, p);
 
   return masterPath(id);
 }
