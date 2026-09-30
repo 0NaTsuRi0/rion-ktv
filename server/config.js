@@ -66,6 +66,7 @@ const config = {
   WATCH_ENABLED: process.env.WATCH_ENABLED !== 'false',
   WATCH_DEBOUNCE_MS: Number(process.env.WATCH_DEBOUNCE_MS) || 5000,
   VAAPI_DEVICE: process.env.VAAPI_DEVICE || '/dev/dri/renderD128',
+  ADMIN_AUTH_ENABLED: process.env.ADMIN_AUTH !== 'false' && process.env.ADMIN_AUTH_ENABLED !== 'false' && process.env.ADMIN_NO_AUTH !== 'true',
 
   get ffmpegPath() { return process.env.FFMPEG_PATH || 'ffmpeg'; },
   get ffprobePath() { return process.env.FFPROBE_PATH || 'ffprobe'; },

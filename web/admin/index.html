@@ -116,14 +116,20 @@ main{max-width:900px;margin:0 auto;padding:10px 12px}
     <input id="login-password" type="password" placeholder="管理员密码" onkeydown="if(event.key==='Enter')doLogin()">
     <div id="login-err"></div>
     <button onclick="doLogin()">登录</button>
+    <div style="margin-top:14px;border-top:1px solid rgba(255,255,255,.08);padding-top:12px">
+      <button style="background:rgba(255,255,255,.06);color:var(--cyan);border:1px solid rgba(54,217,247,.3);font-size:12px;padding:8px" onclick="skipAuth()">⚡ 免密直接进入 (本地测试)</button>
+    </div>
   </div>
   <div id="setup-box" class="auth-box hidden">
     <div class="lg-title">👋 欢迎</div>
-    <div class="lg-sub">首次使用，设置管理员密码</div>
+    <div class="lg-sub">首次使用，可设置密码或直接免密</div>
     <input id="setup-password" type="password" placeholder="设置密码（至少 4 位）" onkeydown="if(event.key==='Enter')document.getElementById('setup-password2').focus()">
     <input id="setup-password2" type="password" placeholder="再次输入密码" onkeydown="if(event.key==='Enter')doSetup()">
     <div id="setup-err"></div>
     <button onclick="doSetup()">设置密码并登录</button>
+    <div style="margin-top:14px;border-top:1px solid rgba(255,255,255,.08);padding-top:12px">
+      <button style="background:rgba(255,255,255,.06);color:var(--cyan);border:1px solid rgba(54,217,247,.3);font-size:12px;padding:8px" onclick="skipAuth()">⚡ 跳过密码，开启免密模式</button>
+    </div>
   </div>
 </div>
 
@@ -192,14 +198,17 @@ main{max-width:900px;margin:0 auto;padding:10px 12px}
 <!-- Pw modal -->
 <div id="pw-modal-overlay" onclick="closePwModal()">
   <div id="pw-modal" onclick="event.stopPropagation()">
-    <h3>🔑 修改密码</h3>
+    <h3>🔑 密码与安全</h3>
     <div class="form-row"><label>当前密码</label><input id="pw-old" type="password"></div>
     <div class="form-row"><label>新密码</label><input id="pw-new" type="password" placeholder="至少 4 位"></div>
     <div class="form-row"><label>确认新密码</label><input id="pw-new2" type="password"></div>
     <div id="pw-err"></div>
-    <div class="modal-btns">
-      <button class="hbtn" onclick="closePwModal()">取消</button>
-      <button class="hbtn primary" onclick="submitChangePassword()">保存</button>
+    <div class="modal-btns" style="justify-content:space-between">
+      <button class="hbtn warn" onclick="disableAuthFromModal()" style="font-size:11px">⚡ 切换为免密模式</button>
+      <div style="display:flex;gap:6px">
+        <button class="hbtn" onclick="closePwModal()">取消</button>
+        <button class="hbtn primary" onclick="submitChangePassword()">保存</button>
+      </div>
     </div>
   </div>
 </div>
@@ -212,12 +221,33 @@ let allSongs=[];
 // ── Auth ──
 async function checkSession(){
   try{const r=await fetch('/api/admin/session');const d=await r.json();
-    if(d.authed)showApp();else if(!d.passwordSet)showSetup();else showLogin();}
+    if(d.authed || d.authDisabled)showApp();else if(!d.passwordSet)showSetup();else showLogin();}
   catch(e){showLogin();}
 }
 function showLogin(){document.getElementById('login-overlay').classList.remove('hidden');document.getElementById('setup-box').classList.add('hidden');document.getElementById('login-box').classList.remove('hidden');}
 function showSetup(){document.getElementById('login-overlay').classList.remove('hidden');document.getElementById('login-box').classList.add('hidden');document.getElementById('setup-box').classList.remove('hidden');}
 function showApp(){document.getElementById('login-overlay').classList.add('hidden');loadAll();}
+
+async function skipAuth(){
+  try {
+    const r = await fetch('/api/admin/disable-auth', { method: 'POST' });
+    if(r.ok) {
+      showApp();
+      toast('⚡ 已开启免密模式，后续进入无需密码');
+    }
+  } catch(e) {
+    showApp();
+  }
+}
+
+async function disableAuthFromModal(){
+  if(!confirm('确认关闭密码保护，切换为免密模式？关闭后局域网内任意设备均可直接进入曲库管理。')) return;
+  const r = await fetch('/api/admin/disable-auth', { method: 'POST' });
+  if(r.ok) {
+    closePwModal();
+    toast('⚡ 已切换为免密模式');
+  }
+}
 
 async function doSetup(){
   const p1=document.getElementById('setup-password').value,p2=document.getElementById('setup-password2').value,err=document.getElementById('setup-err');
@@ -233,7 +263,15 @@ async function doLogin(){
   if(r.ok){document.getElementById('login-password').value='';showApp();}
   else{const d=await r.json().catch(()=>({}));err.textContent=d.error||'密码错误';}
 }
-async function doLogout(){await fetch('/api/admin/logout',{method:'POST'}).catch(()=>{});showLogin();}
+async function doLogout(){
+  const sess = await fetch('/api/admin/session').then(r=>r.json()).catch(()=>({}));
+  if(sess.authDisabled){
+    toast('⚡ 当前处于免密模式，无需退出');
+    return;
+  }
+  await fetch('/api/admin/logout',{method:'POST'}).catch(()=>{});
+  showLogin();
+}
 
 function openPwModal(){document.getElementById('pw-old').value='';document.getElementById('pw-new').value='';document.getElementById('pw-new2').value='';document.getElementById('pw-err').textContent='';document.getElementById('pw-modal-overlay').classList.add('open');}
 function closePwModal(){document.getElementById('pw-modal-overlay').classList.remove('open');}

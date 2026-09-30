@@ -89,7 +89,16 @@ function parseCookies(req) {
   return out;
 }
 
+function isAuthDisabled() {
+  if (config.ADMIN_AUTH_ENABLED === false) return true;
+  try {
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('admin_auth_disabled');
+    return row && row.value === 'true';
+  } catch(e) { return false; }
+}
+
 function isAdminAuthed(req) {
+  if (isAuthDisabled()) return true;
   const token = parseCookies(req)[ADMIN_SESSION_COOKIE];
   return !!(token && adminSessions.has(token));
 }
@@ -109,14 +118,32 @@ function startSession(res) {
   });
 }
 
-// 前端据此判断该弹"设置密码"（首次使用）还是"登录"表单。
+// 前端据此判断该弹"设置密码"（首次使用）还是"登录"表单，还是直接免密进入。
 app.get('/api/admin/session', (req, res) => {
-  res.json({ authed: isAdminAuthed(req), passwordSet: !!getAdminPasswordHash() });
+  const noAuth = isAuthDisabled();
+  res.json({
+    authed: noAuth || isAdminAuthed(req),
+    passwordSet: !!getAdminPasswordHash(),
+    authDisabled: noAuth
+  });
 });
 
-// 首次使用：设置管理员密码。已经设置过密码后，这个接口不再允许直接覆盖
-// （避免任何人不登录、光靠访问这个接口就能重置密码顶替管理员），改密码
-// 走下面需要登录态的 /api/admin/change-password。
+// 一键免密模式（用于开发/测试/内网环境，免去每次输入密码的烦恼）
+app.post('/api/admin/disable-auth', (req, res) => {
+  db.prepare("INSERT INTO settings (key, value) VALUES ('admin_auth_disabled', 'true') ON CONFLICT(key) DO UPDATE SET value = 'true'").run();
+  startSession(res);
+  log.info('ADMIN', '已开启曲库管理免密模式');
+  res.json({ ok: true, authDisabled: true });
+});
+
+// 恢复密码保护
+app.post('/api/admin/enable-auth', requireAdminAuth, (req, res) => {
+  db.prepare("INSERT INTO settings (key, value) VALUES ('admin_auth_disabled', 'false') ON CONFLICT(key) DO UPDATE SET value = 'false'").run();
+  log.info('ADMIN', '已恢复曲库管理密码保护');
+  res.json({ ok: true, authDisabled: false });
+});
+
+// 首次使用：设置管理员密码。
 app.post('/api/admin/setup', (req, res) => {
   if (getAdminPasswordHash()) {
     return res.status(409).json({ error: '管理员密码已设置过，请使用登录' });
@@ -126,6 +153,7 @@ app.post('/api/admin/setup', (req, res) => {
     return res.status(400).json({ error: '密码至少 4 位' });
   }
   setAdminPasswordHash(sha256Hex(password));
+  db.prepare("INSERT INTO settings (key, value) VALUES ('admin_auth_disabled', 'false') ON CONFLICT(key) DO UPDATE SET value = 'false'").run();
   startSession(res);
   log.info('ADMIN', '首次设置曲库管理密码成功');
   res.json({ ok: true });
