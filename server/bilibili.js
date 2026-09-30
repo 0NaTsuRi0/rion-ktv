@@ -1,6 +1,7 @@
 // B站视频搜索、分P解析与流媒体转发模块
 const https = require('https');
 const http = require('http');
+const path = require('path');
 const crypto = require('crypto');
 const log = require('./logger');
 
@@ -243,9 +244,56 @@ async function proxyBilibiliStream(req, res, bvid, cid) {
   }
 }
 
+// 代理获取 B 站封面图片（防盗链 Referer 处理及 302 重定向跟随）
+function proxyImage(imgUrl, res, redirectCount = 0) {
+  const defaultSvg = path.join(__dirname, '../web/icons/album.svg');
+  if (!imgUrl || typeof imgUrl !== 'string' || !imgUrl.startsWith('http')) {
+    return res.sendFile(defaultSvg);
+  }
+  if (redirectCount > 3) {
+    return res.sendFile(defaultSvg);
+  }
+
+  try {
+    const targetUrl = new URL(imgUrl);
+    const client = targetUrl.protocol === 'https:' ? https : http;
+    const req = client.get(imgUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://www.bilibili.com/'
+      }
+    }, proxyRes => {
+      if ([301, 302, 307, 308].includes(proxyRes.statusCode) && proxyRes.headers.location) {
+        let nextUrl = proxyRes.headers.location;
+        if (nextUrl.startsWith('//')) nextUrl = targetUrl.protocol + nextUrl;
+        return proxyImage(nextUrl, res, redirectCount + 1);
+      }
+      if (proxyRes.statusCode === 200) {
+        res.set({
+          'Content-Type': proxyRes.headers['content-type'] || 'image/jpeg',
+          'Cache-Control': 'public, max-age=86400'
+        });
+        return proxyRes.pipe(res);
+      }
+      res.sendFile(defaultSvg);
+    });
+
+    req.on('error', () => {
+      if (!res.headersSent) res.sendFile(defaultSvg);
+    });
+    req.setTimeout(6000, () => {
+      req.destroy();
+      if (!res.headersSent) res.sendFile(defaultSvg);
+    });
+  } catch (e) {
+    if (!res.headersSent) res.sendFile(defaultSvg);
+  }
+}
+
 module.exports = {
   searchBilibili,
   getBilibiliParts,
   getPlayUrl,
-  proxyBilibiliStream
+  proxyBilibiliStream,
+  proxyImage
 };

@@ -11,7 +11,7 @@ const { config } = require('./config');
 const { scanLibrary, rescanLibrary, MV_DIR } = require('./scanner');
 const { ensureHLS, removeHLS, outDir, waitForFile, scheduleHLSCleanup } = require('./hlsgen');
 const { getWatcherStatus } = require('./watcher');
-const { searchBilibili, getBilibiliParts, proxyBilibiliStream } = require('./bilibili');
+const { searchBilibili, getBilibiliParts, proxyBilibiliStream, proxyImage } = require('./bilibili');
 
 // 伴奏文件存在性缓存（避免每次请求都查磁盘）
 let accCache = { timestamp: 0, valid: new Set() };
@@ -210,17 +210,7 @@ app.get('/api/cover/:id', (req, res) => {
   if (song) {
     // 支持远程网络封面（如 B 站歌曲）
     if (song.cover && song.cover.startsWith('http')) {
-      const https = require('https');
-      return https.get(song.cover, { headers: { 'Referer': 'https://www.bilibili.com/' } }, r => {
-        if (r.statusCode === 200) {
-          res.set({
-            'Content-Type': r.headers['content-type'] || 'image/jpeg',
-            'Cache-Control': 'public, max-age=86400'
-          });
-          return r.pipe(res);
-        }
-        res.sendFile(path.join(DEFAULTS, 'album.svg'));
-      }).on('error', () => res.sendFile(path.join(DEFAULTS, 'album.svg')));
+      return proxyImage(song.cover, res);
     }
     if (song.filepath && !song.filepath.startsWith('bilibili:')) {
       const coverPath = path.join(path.dirname(song.filepath), 'cover.jpg');
@@ -481,15 +471,28 @@ app.get('/api/bilibili/parts', async (req, res) => {
   }
 });
 
+app.get('/api/bilibili/cover', (req, res) => {
+  proxyImage(req.query.url, res);
+});
+
 app.post('/api/bilibili/enqueue', (req, res) => {
   try {
     const { bvid, cid, partTitle, videoTitle, author, pic, duration, nickname } = req.body || {};
     if (!bvid || !cid) return res.status(400).json({ error: '缺少 bvid 或 cid' });
 
     const key = `bilibili:${bvid}:${cid}`;
+    let displayTitle = (videoTitle || bvid).trim();
+    const pTitle = (partTitle || '').trim();
+    if (pTitle && pTitle !== displayTitle) {
+      if (pTitle.toLowerCase().startsWith(displayTitle.toLowerCase())) {
+        displayTitle = pTitle;
+      } else {
+        displayTitle = `${displayTitle} - ${pTitle}`;
+      }
+    }
+
     let song = db.prepare('SELECT id FROM songs WHERE filename = ?').get(key);
     if (!song) {
-      const displayTitle = (partTitle && partTitle.trim()) ? partTitle.trim() : (videoTitle || bvid);
       const displayArtist = author ? `B站 · ${author}` : 'B站';
       const sec = parseInt(duration) || 0;
       const info = db.prepare(`
@@ -497,6 +500,9 @@ app.post('/api/bilibili/enqueue', (req, res) => {
         VALUES (?, ?, ?, ?, ?, ?, 1)
       `).run(displayTitle, displayArtist, key, key, pic || '', sec);
       song = { id: info.lastInsertRowid };
+    } else {
+      // 同步最新复合标题与封面
+      db.prepare("UPDATE songs SET title = ?, cover = COALESCE(NULLIF(cover, ''), ?) WHERE id = ?").run(displayTitle, pic || '', song.id);
     }
 
     const qInfo = db.prepare('INSERT INTO queue (song_id, nickname) VALUES (?, ?)').run(song.id, nickname || '匿名用户');
