@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>璃音K歌 · 电视端</title>
+<link rel="icon" href="/icons/favicon.svg">
+<style>
+:root{--bg:#08081c;--accent:#c736f7;--accent2:#36d9f7;--pink:#ff4f9b;--text:#f4f4ff;--sub:#8888aa;--card:rgba(0,0,0,.55)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:100vw;height:100vh;overflow:hidden;background:#000;color:var(--text);font-family:"PingFang SC","Microsoft YaHei",sans-serif;user-select:none;-webkit-user-select:none}
+#video-layer{position:fixed;inset:0;z-index:1;background:#000}
+#video-layer video{width:100%;height:100%;object-fit:contain}
+#fs-idle{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;background:var(--bg)}
+#fs-idle .big{font-size:48px;font-weight:900;background:linear-gradient(135deg,#ff6b35,#f7c948,#ff6b35);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+#fs-idle .sub{font-size:18px;color:var(--sub);margin-top:10px}
+#load-overlay{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.5)}
+#load-overlay .spinner{width:40px;height:40px;border:3px solid rgba(255,255,255,.2);border-top-color:var(--accent2);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+#top-bar{position:fixed;top:0;left:0;right:0;z-index:10;display:flex;align-items:center;justify-content:space-between;padding:12px 20px;pointer-events:none}
+#top-bar>*{pointer-events:all}
+#song-info{display:none;position:relative;max-width:350px;min-width:200px}
+#song-info .si-face{display:flex;flex-direction:row;gap:14px;padding:10px 16px;background:var(--card);backdrop-filter:blur(12px);border-radius:12px;transition:opacity .5s;width:100%}
+#song-info .si-face.si-hidden{opacity:0;position:absolute;top:0;left:0}
+#song-info .si-left{display:flex;flex-direction:row;align-items:center;gap:6px;flex-shrink:0}
+#song-info .si-tag{writing-mode:vertical-lr;font-size:9px;font-weight:600;letter-spacing:1px;padding:3px 2px;border-radius:3px;line-height:1.3;flex-shrink:0}
+#song-info .si-tag.playing{color:var(--accent2);background:rgba(54,217,247,.12)}
+#song-info .si-tag.next{color:var(--orange);background:rgba(255,140,66,.12)}
+#song-info .si-cover-wrap{width:44px;height:44px;flex-shrink:0}
+#song-info .si-cover-wrap img{width:44px;height:44px;border-radius:8px;object-fit:cover}
+#song-info .si-right{display:flex;flex-direction:column;justify-content:center;gap:3px;overflow:hidden;min-width:0;flex:1}
+#song-info .si-title{font-size:20px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#song-info .si-meta{font-size:13px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#clock-box{background:var(--card);backdrop-filter:blur(12px);border-radius:12px;padding:8px 14px;display:flex;flex-direction:row;align-items:center;gap:12px}
+#clock-box .ct{text-align:right}
+#clock-box .ct .time{font-size:22px;font-weight:600}
+#clock-box .ct .date{font-size:12px;color:var(--sub)}
+#clock-box .time{font-size:22px;font-weight:600}
+#clock-box .date{font-size:12px;color:var(--sub)}
+#qbadge{background:var(--accent);border-radius:12px;padding:6px 14px;font-size:13px;font-weight:600;cursor:pointer}
+/* 底部进度条 */
+#prog-bar{position:fixed;bottom:0;left:0;right:0;z-index:10;height:6px;background:rgba(255,255,255,.06)}
+#prog-bar .fill{height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .3s}
+
+#qr-corner{position:fixed;right:20px;bottom:20px;z-index:5;background:var(--card);border-radius:16px;padding:8px;cursor:pointer}
+#qr-corner img{display:block;width:110px;height:110px}
+#qr-corner .qr-label{text-align:center;font-size:11px;color:var(--sub);margin-top:4px}
+#toast{position:fixed;left:50%;top:24px;transform:translateX(-50%) translateY(-80px);z-index:30;background:#fff;color:#111;padding:8px 18px;border-radius:12px;font-size:13px;transition:.25s;box-shadow:0 8px 24px rgba(0,0,0,.3)}
+#toast.show{transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+
+<div id="video-layer">
+  <video id="video" muted></video>
+  <div id="fs-idle"><div class="big">璃音K歌</div><div class="sub">扫码点歌 · 大屏沉浸演唱</div><div class="sub" style="margin-top:20px;color:#ff8c42;font-size:16px">👆 点击屏幕开始</div></div>
+  <div id="load-overlay"><div class="spinner"></div></div>
+</div>
+
+<div id="top-bar">
+  <div id="song-info">
+    <div class="si-face" id="si-now">
+      <div class="si-left">
+        <div class="si-tag playing">播放中</div>
+        <div class="si-cover-wrap"><img id="si-cover" src=""></div>
+      </div>
+      <div class="si-right">
+        <div class="si-title" id="si-title">—</div>
+        <div class="si-meta" id="si-meta">—</div>
+      </div>
+    </div>
+    <div class="si-face si-hidden" id="si-next">
+      <div class="si-left">
+        <div class="si-tag next">下一首</div>
+        <div class="si-cover-wrap"><img id="si-cover-next" src=""></div>
+      </div>
+      <div class="si-right">
+        <div class="si-title" id="si-title-next">—</div>
+        <div class="si-meta" id="si-meta-next">—</div>
+      </div>
+    </div>
+  </div>
+  <div style="flex:1"></div>
+  <div id="clock-box">
+    <div class="ct">
+      <div class="time" id="clock-time">00:00</div>
+      <div class="date" id="clock-date">—</div>
+    </div>
+    <img id="qr-img" src="/api/qrcode" style="width:56px;height:56px;border-radius:6px;cursor:pointer" onclick="showToast('手机扫码: '+location.origin+'/mobile')">
+  </div>
+  </div>
+
+<div id="prog-bar"><div class="fill" id="prog-fill"></div></div>
+<div id="toast"></div>
+
+<script src="hls.min.js"></script>
+<script>
+const video=document.getElementById('video');
+const fsIdle=document.getElementById('fs-idle');
+const loadOverlay=document.getElementById('load-overlay');
+const songInfo=document.getElementById('song-info');
+const progBar=document.getElementById('prog-bar');
+const toast=document.getElementById('toast');
+
+let queueData=[],curSong=null,infoAltTimer=null,showNext=false,voiceTrack=0,audioReady=false,hls=null,loadDur=0;
+
+// 音频解锁
+function unlockAudio(){
+  if(audioReady)return;
+  audioReady=true;
+  video.muted=false;
+  resetIdle();
+  showToast('已激活 ✅');
+  if(curSong)loadSong(curSong.song_id);
+}
+
+// 时钟
+function updClock(){
+  const n=new Date();
+  document.getElementById('clock-time').textContent=n.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'});
+  document.getElementById('clock-date').textContent=n.toLocaleDateString('zh-CN',{month:'short',day:'numeric',weekday:'short'});
+}
+setInterval(updClock,1000);updClock();
+
+// Toast
+let toastTimer;
+function showToast(msg){
+  clearTimeout(toastTimer);toast.textContent=msg;toast.classList.add('show');
+  toastTimer=setTimeout(()=>toast.classList.remove('show'),2000);
+}
+
+// WebSocket
+function connectWS(){
+  const ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
+  ws.onmessage=ev=>{
+    try{
+      const m=JSON.parse(ev.data);
+      if(m.type==='queue'){queueData=m.data;render();}
+      else if(m.type==='control')switch(m.action){
+        case'play_pause':togglePause();break;
+        case'voice':toggleVoice();break;
+        case'repeat':restartSong();break;
+        case'next':cutSong();break;
+        case'fullscreen':document.body.requestFullscreen().catch(()=>{});break;
+        case'home':document.fullscreenElement&&document.exitFullscreen();break;
+        case'volume':if(m.value!=null)video.volume=Number(m.value);break;
+      }
+    }catch(e){}
+  };
+  ws.onclose=()=>setTimeout(connectWS,2000);
+}
+
+// 渲染
+function render(){
+  const playing=queueData.find(q=>q.status==='playing');
+  const next=queueData.find(q=>q.status==='waiting');
+  if(playing){
+    fsIdle.style.display='none';video.style.display='block';
+    songInfo.style.display='flex';
+    updateSongInfo(playing,next);
+    if(!curSong||curSong.queue_id!==playing.queue_id){destroyHLS();curSong=playing;loadSong(playing.song_id);}
+  }else{
+    destroyHLS();video.pause();video.style.display='none';video.removeAttribute('src');
+    fsIdle.style.display='flex';resetIdle();
+    songInfo.style.display='none';loadOverlay.style.display='none';
+    if(infoAltTimer){clearInterval(infoAltTimer);infoAltTimer=null;}
+    loadDur=0;curSong=null;document.getElementById('prog-fill').style.width='0';if(progBar)progBar.style.display='none';
+  }
+}
+
+// 移除 _realDur，HLS 的 video.duration 会自动获取总时长
+function updateSongInfo(playing,next){
+  if(infoAltTimer){clearInterval(infoAltTimer);infoAltTimer=null;}
+  showNext=false;
+  var now=document.getElementById('si-now'),siNext=document.getElementById('si-next');
+  document.getElementById('si-title').textContent=playing.title;
+  document.getElementById('si-meta').textContent=`${playing.artist||''} · ${playing.nickname||'匿名用户'}`;
+  document.getElementById('si-cover').src='/api/cover/'+playing.song_id;
+  if(next){
+    document.getElementById('si-title-next').textContent=next.title;
+    document.getElementById('si-meta-next').textContent=`${next.artist||''} · ${next.nickname||'匿名用户'}`;
+    document.getElementById('si-cover-next').src='/api/cover/'+next.song_id;
+  }
+  if(next)infoAltTimer=setInterval(()=>{
+    showNext=!showNext;
+    if(showNext){
+      now.classList.add('si-hidden');
+      siNext.classList.remove('si-hidden');
+    }else{
+      siNext.classList.add('si-hidden');
+      now.classList.remove('si-hidden');
+    }
+  },10000);
+}
+
+function loadSong(songId, track){
+  if(track!==undefined)voiceTrack=track;
+  document.getElementById('prog-fill').style.width='0';video.currentTime=0;
+  destroyHLS();
+  if(!audioReady){
+    loadOverlay.style.display='none';
+    fsIdle.style.display='flex';
+    fsIdle.innerHTML='<div class="big" style="font-size:26px">👆 点击屏幕开始</div><div class="sub">'+(curSong?curSong.title:'')+'</div>';
+    return;
+  }
+  // 从数据库取总时长用于进度条，播放中保持 idle 不隐藏
+  loadDur=curSong&&curSong.duration?curSong.duration:0;
+  if(!loadDur){fetch('/api/songs/'+songId+'/meta').then(r=>r.json()).then(d=>{if(d.duration)loadDur=d.duration;}).catch(()=>{});}
+  clearTimeout(window._loadTimeout);
+  window._loadTimeout=setTimeout(()=>{loadOverlay.style.display='none';if(progBar)progBar.style.display='';},60000);
+  destroyHLS();
+  if(Hls.isSupported()){
+    const sourceUrl = '/hls/'+songId+'/master.m3u8?t='+Date.now();
+    hls=new Hls({
+      startLevel:0,
+      lowBufferWatchdogPeriod:0.5,
+      maxBufferLength:1,
+      maxMaxBufferLength:1,
+      backbufferLength:0,
+      startFragPrefetch:true,
+      appendErrorMaxRetry:0,
+      startPosition:0,
+      autoStartLoad:true,
+      xhrSetup(xhr,url){
+        xhr.setRequestHeader('Cache-Control','no-cache');
+        xhr.setRequestHeader('Pragma','no-cache');
+        xhr.setRequestHeader('Expires','0');
+      }
+    });
+    hls.loadSource(sourceUrl);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED,()=>{
+      if(voiceTrack>0&&hls.audioTracks.length>voiceTrack)hls.audioTrack=voiceTrack;
+      fsIdle.style.display='none';loadOverlay.style.display='none';if(progBar)progBar.style.display='';
+      video.play().catch(()=>{});
+    });
+    hls.on(Hls.Events.ERROR,(e,d)=>{if(d.fatal)destroyHLS();});
+  }else{
+    video.src='/stream/'+songId+'?t='+Date.now();
+    video.play().catch(()=>{});
+  }
+}
+function destroyHLS(){if(hls){try{hls.destroy();}catch(e){}hls=null;}}
+
+function resetIdle(){
+  fsIdle.innerHTML='<div class="big">璃音K歌</div><div class="sub">扫码点歌 · 大屏沉浸演唱</div>'+(audioReady?'':'<div class="sub" style="margin-top:20px;color:#ff8c42;font-size:16px">👆 点击屏幕开始</div>');
+}
+
+function togglePause(){if(video.paused)video.play().catch(()=>{});else video.pause();}
+function cutSong(){loadOverlay.style.display='flex';document.getElementById('prog-fill').style.width='0';destroyHLS();video.pause();video.style.display='none';fetch('/api/queue/next',{method:'POST'});}
+function restartSong(){video.currentTime=0;video.play().catch(()=>{});showToast('重唱 🔄');}
+function toggleVoice(){
+  if(hls&&hls.audioTracks.length>=2){
+    voiceTrack=hls.audioTrack===0?1:0;
+    hls.audioTrack=voiceTrack;
+    showToast(voiceTrack===0?'原唱':'伴唱');
+  }else showToast('当前歌曲没有伴奏');
+}
+function adjVolume(d){video.volume=Math.max(0,Math.min(1,Math.round((video.volume+d)*10)/10));}
+
+
+// 视频事件
+video.addEventListener('play',()=>{fsIdle.style.display='none';loadOverlay.style.display='none';if(progBar)progBar.style.display='';});
+video.addEventListener('playing',()=>{fsIdle.style.display='none';loadOverlay.style.display='none';if(progBar)progBar.style.display='';resetIdle();});
+video.addEventListener('pause',()=>{if(curSong&&!video.ended)showToast('点击屏幕开始播放');});
+video.addEventListener('waiting',()=>{if(!video.paused)loadOverlay.style.display='flex';});
+video.addEventListener('timeupdate',()=>{
+  var dur=video.duration&&isFinite(video.duration)&&video.duration>0?video.duration:(loadDur||0);
+  if(dur>0){
+    var pct=Math.min(100,video.currentTime/dur*100);
+    if(pct>=0)document.getElementById('prog-fill').style.width=pct+'%';
+  }
+});
+video.addEventListener('ended',()=>{if(curSong)cutSong();});
+
+// 点击解锁
+document.getElementById('video-layer').addEventListener('click',unlockAudio);
+
+// 键盘
+document.addEventListener('keydown',e=>{
+  switch(e.key){
+    case' ':case'k':e.preventDefault();togglePause();break;
+    case'ArrowRight':e.preventDefault();cutSong();break;
+    case'ArrowUp':e.preventDefault();adjVolume(0.1);break;
+    case'ArrowDown':e.preventDefault();adjVolume(-0.1);break;
+    case'f':e.preventDefault();document.fullscreenElement?document.exitFullscreen():document.body.requestFullscreen().catch(()=>{});break;
+    case'v':e.preventDefault();toggleVoice();break;
+    case'r':e.preventDefault();restartSong();break;
+  }
+});
+
+// 立即连接 WS，然后拉队列渲染
+connectWS();
+fetch('/api/queue').then(r=>r.json()).then(d=>{queueData=d;render();});
+</script>
+</body>
+</html>

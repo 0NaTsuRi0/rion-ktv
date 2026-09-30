@@ -1,0 +1,5 @@
+<svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+  <defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#36d9f7"/><stop offset="100%" stop-color="#c736f7"/></linearGradient></defs>
+  <circle cx="16" cy="16" r="15" fill="url(#g)"/>
+  <text x="16" y="22" font-size="18" text-anchor="middle" fill="#fff" font-weight="bold">♪</text>
+</svg>

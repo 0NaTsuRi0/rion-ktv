@@ -1,5 +1,0 @@
-#!/bin/bash
-# 是否清空 MV 曲库文件由 wizard/uninstall 收集（字段 wizard_clear_mv），实际
-# 清空动作放到 uninstall_callback 执行——那时容器已经被 docker compose down
-# 停掉，不会有进程正在读写 MV 曲库目录里的文件。
-exit 0

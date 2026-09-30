@@ -1,0 +1,21 @@
+{
+  "name": "ktv-server",
+  "version": "2.0.0",
+  "description": "局域网K歌系统服务端",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.1",
+    "express": "^4.21.0",
+    "multer": "^1.4.5-lts.1",
+    "qrcode": "^1.5.4",
+    "sql.js": "^1.14.1",
+    "ws": "^8.18.0"
+  },
+  "allowScripts": {
+    "better-sqlite3@11.10.0": true
+  }
+}

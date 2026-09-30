@@ -15,7 +15,12 @@ fnpack-*
 
 # 运行时数据（本地测试容器落盘的数据库、封面、HLS缓存等，不应入库）
 data/
+mv/
+songs/
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
+
+# 用户本地配置
+.env

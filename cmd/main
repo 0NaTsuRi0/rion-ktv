@@ -1,9 +1,0 @@
-#!/bin/bash
-DOCKER_NAME="junyao-ktv"
-is_docker_running(){ docker inspect $DOCKER_NAME | grep -q '"Status": "running",' || exit 1; }
-case $1 in
-start) exit 0;;
-stop) exit 0;;
-status) if is_docker_running; then exit 0; else exit 3; fi;;
-*) exit 1;;
-esac

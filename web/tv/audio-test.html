@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>音频对比测试</title>
+<style>
+body{background:#111;color:#eee;font-family:sans-serif;padding:20px;text-align:center}
+video{width:90%;max-width:600px;border-radius:12px;margin:10px 0}
+.btns{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+button{padding:12px 24px;border-radius:10px;border:none;font-size:16px;cursor:pointer;transition:.15s;min-width:120px}
+button.og{background:#c736f7;color:#fff}
+button.acc{background:#36d9f7;color:#111}
+button.on{outline:3px solid #fff;transform:scale(1.05)}
+select{padding:10px;border-radius:8px;font-size:14px;margin:10px}
+label{font-size:13px;color:#888}
+</style>
+</head>
+<body>
+<h2>🎵 音频对比测试</h2>
+<p style="color:#888;font-size:13px">直接播放源文件，对比原唱和伴奏</p>
+
+<video id="v" controls autoplay></video>
+
+<div class="btns">
+  <button class="og on" id="btn-og" onclick="switchTrack(0)">🎤 原唱</button>
+  <button class="acc" id="btn-acc" onclick="switchTrack(1)">🎵 伴奏</button>
+</div>
+
+<div style="margin-top:16px">
+  <label>选择歌曲：</label>
+  <select id="song-select" onchange="changeSong(this.value)">
+    <option value="2">周杰伦 - 晴天</option>
+    <option value="1">EGOIST - All Alone with You</option>
+  </select>
+</div>
+
+<p id="status" style="color:#666;font-size:12px;margin-top:20px"></p>
+
+<script>
+const v = document.getElementById('v');
+let currentTrack = 0;
+let currentId = 2;
+
+function switchTrack(track) {
+  currentTrack = track;
+  document.getElementById('btn-og').classList.toggle('on', track === 0);
+  document.getElementById('btn-acc').classList.toggle('on', track === 1);
+
+  // 直接切换音轨：通过 track 参数请求服务端切换
+  const t = track === 1 ? '?track=1' : '';
+  v.src = '/stream/' + currentId + t;
+  v.play().catch(() => {});
+  document.getElementById('status').textContent = track === 0 ? '原唱（视频原始音轨）' : '伴奏（独立伴奏文件）';
+}
+
+function changeSong(id) {
+  currentId = Number(id);
+  switchTrack(currentTrack);
+}
+
+// 初始加载
+switchTrack(0);
+</script>
+</body>
+</html>
