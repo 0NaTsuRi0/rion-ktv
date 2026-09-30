@@ -8,10 +8,10 @@ const { WebSocketServer } = require('ws');
 const dbMod = require('./db');
 const log = require('./logger');
 const { config } = require('./config');
-// 这些模块不依赖 db，可以在顶层 import，路由闭包也能正确引用
 const { scanLibrary, rescanLibrary, MV_DIR } = require('./scanner');
 const { ensureHLS, removeHLS, outDir, waitForFile, scheduleHLSCleanup } = require('./hlsgen');
 const { getWatcherStatus } = require('./watcher');
+const { searchBilibili, getBilibiliParts, proxyBilibiliStream } = require('./bilibili');
 
 // 伴奏文件存在性缓存（避免每次请求都查磁盘）
 let accCache = { timestamp: 0, valid: new Set() };
@@ -180,10 +180,26 @@ app.get('/api/cover/:id', (req, res) => {
   const DEFAULTS = path.join(__dirname, '../web/icons');
   const song = db.prepare('SELECT * FROM songs WHERE id = ?').get(req.params.id);
   if (song) {
-    const coverPath = path.join(path.dirname(song.filepath), 'cover.jpg');
-    if (fs.existsSync(coverPath)) {
-      res.set({ 'Cache-Control': 'public, max-age=86400' });
-      return res.sendFile(coverPath);
+    // 支持远程网络封面（如 B 站歌曲）
+    if (song.cover && song.cover.startsWith('http')) {
+      const https = require('https');
+      return https.get(song.cover, { headers: { 'Referer': 'https://www.bilibili.com/' } }, r => {
+        if (r.statusCode === 200) {
+          res.set({
+            'Content-Type': r.headers['content-type'] || 'image/jpeg',
+            'Cache-Control': 'public, max-age=86400'
+          });
+          return r.pipe(res);
+        }
+        res.sendFile(path.join(DEFAULTS, 'album.svg'));
+      }).on('error', () => res.sendFile(path.join(DEFAULTS, 'album.svg')));
+    }
+    if (song.filepath && !song.filepath.startsWith('bilibili:')) {
+      const coverPath = path.join(path.dirname(song.filepath), 'cover.jpg');
+      if (fs.existsSync(coverPath)) {
+        res.set({ 'Cache-Control': 'public, max-age=86400' });
+        return res.sendFile(coverPath);
+      }
     }
   }
   res.sendFile(path.join(DEFAULTS, 'album.svg'));
@@ -414,6 +430,66 @@ app.post('/api/upload/accompaniment/:songId', audioUpload.single('file'), (req, 
   res.json({ ok: true, path: req.file.path });
 });
 
+// ---------- B 站搜索与解析点歌 ----------
+app.get('/api/bilibili/search', async (req, res) => {
+  try {
+    const q = req.query.q || '';
+    const page = parseInt(req.query.page) || 1;
+    const list = await searchBilibili(q, page);
+    res.json(list);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/bilibili/parts', async (req, res) => {
+  try {
+    const bvid = req.query.bvid || '';
+    if (!bvid) return res.status(400).json({ error: '缺少 bvid' });
+    const parts = await getBilibiliParts(bvid);
+    res.json(parts);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/bilibili/enqueue', (req, res) => {
+  try {
+    const { bvid, cid, partTitle, videoTitle, author, pic, duration, nickname } = req.body || {};
+    if (!bvid || !cid) return res.status(400).json({ error: '缺少 bvid 或 cid' });
+
+    const key = `bilibili:${bvid}:${cid}`;
+    let song = db.prepare('SELECT id FROM songs WHERE filename = ?').get(key);
+    if (!song) {
+      const displayTitle = partTitle && partTitle !== videoTitle ? `${videoTitle} - ${partTitle}` : (partTitle || videoTitle || bvid);
+      const displayArtist = author ? `B站 · ${author}` : 'B站';
+      const sec = typeof duration === 'number' ? duration : 0;
+      const info = db.prepare(`
+        INSERT INTO songs (title, artist, filename, filepath, cover, duration, audio_tracks)
+        VALUES (?, ?, ?, ?, ?, ?, 1)
+      `).run(displayTitle, displayArtist, key, key, pic || '', sec);
+      song = { id: info.lastInsertRowid };
+    }
+
+    const qInfo = db.prepare('INSERT INTO queue (song_id, nickname) VALUES (?, ?)').run(song.id, nickname || '匿名用户');
+    db.prepare('UPDATE songs SET play_count = play_count + 1 WHERE id = ?').run(song.id);
+
+    const playing = db.prepare("SELECT * FROM queue WHERE status='playing'").get();
+    if (!playing) {
+      db.prepare("UPDATE queue SET status='playing' WHERE id=?").run(qInfo.lastInsertRowid);
+    }
+    broadcastQueue();
+    res.json({ ok: true, queue_id: qInfo.lastInsertRowid, song_id: song.id });
+  } catch(e) {
+    log.error('BILI', `点歌失败: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/stream/bilibili/:bvid/:cid', (req, res) => {
+  proxyBilibiliStream(req, res, req.params.bvid, req.params.cid);
+});
+
 // ---------- MV 直传流 (Range 请求) ----------
 // 历史接口，现已不是 TV 播放器的主路径(见上面的 /hls)。保留作为兼容兜底：
 // 例如 hls.js 加载失败、或未来某个场景需要拿到原始文件直传时使用。仍支持
@@ -422,7 +498,17 @@ app.post('/api/upload/accompaniment/:songId', audioUpload.single('file'), (req, 
 // 做音轨切换后还要拖进度条的场景——那正是旧 bug 的根因，具体解释见 /hls 路由。
 app.get('/stream/:id', (req, res) => {
   const song = db.prepare('SELECT * FROM songs WHERE id = ?').get(req.params.id);
-  if (!song || !fs.existsSync(song.filepath)) return res.status(404).end();
+  if (!song) return res.status(404).end();
+
+  // B 站网络歌曲直接代理流
+  if (song.filepath && song.filepath.startsWith('bilibili:')) {
+    const parts = song.filepath.split(':');
+    const bvid = parts[1];
+    const cid = parts[2];
+    return proxyBilibiliStream(req, res, bvid, cid);
+  }
+
+  if (!fs.existsSync(song.filepath)) return res.status(404).end();
 
   const trackParam = req.query.track;
   const hasMultiTrack = (song.audio_tracks || 1) >= 2;

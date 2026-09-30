@@ -248,6 +248,19 @@ function loadSong(songId, track){
   clearTimeout(window._loadTimeout);
   window._loadTimeout=setTimeout(()=>{loadOverlay.style.display='none';if(progBar)progBar.style.display='';},60000);
   destroyHLS();
+
+  // B 站网络视频单轨直接播放
+  const isBili = curSong && curSong.filename && curSong.filename.startsWith('bilibili:');
+  if(isBili){
+    const parts = curSong.filename.split(':');
+    video.src = '/stream/bilibili/' + parts[1] + '/' + parts[2];
+    voiceTrack = 0;
+    updIndicators(); broadcastState();
+    fsIdle.style.display='none'; loadOverlay.style.display='none'; if(progBar) progBar.style.display='';
+    video.play().catch(()=>{});
+    return;
+  }
+
   if(Hls.isSupported()){
     const sourceUrl = '/hls/'+songId+'/master.m3u8?t='+Date.now();
     hls=new Hls({
@@ -318,6 +331,10 @@ function cutSong(){
 }
 function restartSong(){video.currentTime=0;video.play().catch(()=>{});showToast('重唱 🔄');}
 function toggleVoice(){
+  if(curSong && curSong.filename && curSong.filename.startsWith('bilibili:')){
+    showToast('B站歌曲为单轨伴奏，不支持切原唱');
+    return;
+  }
   if(hls&&hls.audioTracks.length>=2){
     voiceTrack=hls.audioTrack===0?1:0;
     hls.audioTrack=voiceTrack;
