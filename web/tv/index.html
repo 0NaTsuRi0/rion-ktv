@@ -249,18 +249,7 @@ function loadSong(songId, track){
   clearTimeout(window._loadTimeout);
   window._loadTimeout=setTimeout(()=>{loadOverlay.style.display='none';if(progBar)progBar.style.display='';},60000);
   destroyHLS();
-
-  // B 站网络视频单轨直接播放
-  const isBili = curSong && curSong.filename && curSong.filename.startsWith('bilibili:');
-  if(isBili){
-    const parts = curSong.filename.split(':');
-    video.src = '/stream/bilibili/' + parts[1] + '/' + parts[2];
-    voiceTrack = 0;
-    updIndicators(); broadcastState();
-    fsIdle.style.display='none'; loadOverlay.style.display='none'; if(progBar) progBar.style.display='';
-    video.play().catch(()=>{});
-    return;
-  }
+  loadOverlay.style.display='flex';
 
   if(Hls.isSupported()){
     const sourceUrl = '/hls/'+songId+'/master.m3u8?t='+Date.now();

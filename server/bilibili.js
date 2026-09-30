@@ -2,6 +2,7 @@
 const https = require('https');
 const http = require('http');
 const path = require('path');
+const fs = require('fs');
 const crypto = require('crypto');
 const log = require('./logger');
 
@@ -290,10 +291,94 @@ function proxyImage(imgUrl, res, redirectCount = 0) {
   }
 }
 
+// 下载 B 站视频到本地缓存目录（支持复用下载 Promise、302 跳转、完成重命名）
+const downloadingTasks = new Map();
+
+function downloadBilibiliVideo(bvid, cid, cacheDir) {
+  const key = `${bvid}_${cid}`;
+  const targetFile = path.join(cacheDir, `${key}.mp4`);
+  const tmpFile = path.join(cacheDir, `${key}.mp4.tmp`);
+
+  // 1. 如果已存在有效文件（> 100KB），直接返回
+  if (fs.existsSync(targetFile)) {
+    try {
+      const st = fs.statSync(targetFile);
+      if (st.size > 100000) return Promise.resolve(targetFile);
+    } catch(e) {}
+  }
+
+  // 2. 如果正在下载，直接复用任务
+  if (downloadingTasks.has(key)) {
+    return downloadingTasks.get(key);
+  }
+
+  const p = (async () => {
+    log.info('BILI', `开始下载 B 站视频到本地缓存: ${bvid} (cid: ${cid})`);
+    const streamUrl = await getPlayUrl(bvid, cid);
+
+    function doDownload(url, redirectCount = 0) {
+      if (redirectCount > 3) return Promise.reject(new Error('Too many redirects'));
+      return new Promise((resolve, reject) => {
+        const u = new URL(url);
+        const client = u.protocol === 'https:' ? https : http;
+        const req = client.get(url, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://www.bilibili.com/'
+          }
+        }, res => {
+          if ([301, 302, 307, 308].includes(res.statusCode) && res.headers.location) {
+            let nextUrl = res.headers.location;
+            if (nextUrl.startsWith('//')) nextUrl = u.protocol + nextUrl;
+            return resolve(doDownload(nextUrl, redirectCount + 1));
+          }
+          if (res.statusCode !== 200) {
+            return reject(new Error(`下载失败 HTTP ${res.statusCode}`));
+          }
+          const out = fs.createWriteStream(tmpFile);
+          let received = 0;
+          res.pipe(out);
+          out.on('close', () => {
+            try {
+              if (fs.existsSync(targetFile)) fs.unlinkSync(targetFile);
+              fs.renameSync(tmpFile, targetFile);
+              const sz = fs.statSync(targetFile).size;
+              log.info('BILI', `B 站视频下载完成 (${(sz / 1024 / 1024).toFixed(1)}MB): ${targetFile}`);
+              resolve(targetFile);
+            } catch(e) {
+              reject(e);
+            }
+          });
+          out.on('error', reject);
+        });
+        req.on('error', reject);
+        req.setTimeout(120000, () => {
+          req.destroy();
+          reject(new Error('下载超时'));
+        });
+      });
+    }
+
+    try {
+      const res = await doDownload(streamUrl);
+      return res;
+    } catch(err) {
+      try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch(e) {}
+      log.error('BILI', `下载失败: ${err.message}`);
+      throw err;
+    }
+  })();
+
+  downloadingTasks.set(key, p);
+  p.finally(() => downloadingTasks.delete(key));
+  return p;
+}
+
 module.exports = {
   searchBilibili,
   getBilibiliParts,
   getPlayUrl,
   proxyBilibiliStream,
-  proxyImage
+  proxyImage,
+  downloadBilibiliVideo
 };

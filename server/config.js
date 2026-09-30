@@ -54,6 +54,7 @@ function resolveDir(envVal, defaultRel) {
 const DATA_DIR = resolveDir(process.env.DATA_DIR, 'data');
 const HLS_DIR = resolveDir(process.env.HLS_DIR, 'data/hls');
 const COVERS_DIR = resolveDir(process.env.COVERS_DIR, 'data/covers');
+const BILI_CACHE_DIR = resolveDir(process.env.BILI_CACHE_DIR, 'data/bili_cache');
 const MV_DIR = resolveDir(process.env.MV_DIR, 'songs');
 
 const config = {
@@ -62,6 +63,7 @@ const config = {
   MV_DIR,
   HLS_DIR,
   COVERS_DIR,
+  BILI_CACHE_DIR,
   HLS_CACHE_MAX_AGE_DAYS: Number(process.env.HLS_CACHE_MAX_AGE_DAYS) || 3,
   WATCH_ENABLED: process.env.WATCH_ENABLED !== 'false',
   WATCH_DEBOUNCE_MS: Number(process.env.WATCH_DEBOUNCE_MS) || 5000,
@@ -76,7 +78,7 @@ const config = {
 
 // 启动时自动创建必要的运行时目录
 function ensureDirs() {
-  const dirs = [config.DATA_DIR, config.HLS_DIR];
+  const dirs = [config.DATA_DIR, config.HLS_DIR, config.BILI_CACHE_DIR];
   for (const d of dirs) {
     if (!fs.existsSync(d)) {
       fs.mkdirSync(d, { recursive: true });

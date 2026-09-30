@@ -257,7 +257,10 @@ document.querySelectorAll('.sb-btn').forEach(el=>{
     if(curSub==='all') loadSongs(searchInput.value.trim());
     if(curSub==='artist'){curArtistPage=null;buildArtistList(allArtistData);}
     if(curSub==='fav') loadFavorites();
-    if(curSub==='bili' && !biliList.children.length && biliInput.value.trim()) doBiliSearch();
+    if(curSub==='bili') {
+      if(biliInput.value.trim()) doBiliSearch();
+      else loadBiliHistory();
+    }
   });
 });
 
@@ -270,6 +273,9 @@ const biliLoading = document.getElementById('bili-loading');
 
 biliBtn.onclick = () => doBiliSearch();
 biliInput.onkeydown = e => { if(e.key === 'Enter') doBiliSearch(); };
+biliInput.oninput = () => {
+  if (!biliInput.value.trim()) loadBiliHistory();
+};
 
 // 提示函数兼容
 function toast(m){ if(typeof showToast === 'function') showToast(m); else alert(m); }
@@ -277,7 +283,7 @@ function toast(m){ if(typeof showToast === 'function') showToast(m); else alert(
 let biliSearching = false;
 async function doBiliSearch() {
   const q = biliInput.value.trim();
-  if(!q) return showToast('请输入搜索关键词');
+  if(!q) return loadBiliHistory();
   if(biliSearching) return;
   biliSearching = true;
   biliList.innerHTML = '';
@@ -300,6 +306,58 @@ async function doBiliSearch() {
   } finally {
     biliSearching = false;
   }
+}
+
+async function loadBiliHistory() {
+  if (biliInput.value.trim()) return;
+  biliList.innerHTML = '';
+  biliLoading.style.display = 'none';
+  biliEmpty.style.display = 'none';
+
+  try {
+    const res = await fetch('/api/bilibili/history');
+    const list = await res.json();
+    if (biliInput.value.trim()) return;
+    if (!list || !list.length) {
+      biliEmpty.style.display = 'block';
+      biliEmpty.textContent = '输入歌名、歌手或 B 站 BV 号进行搜索';
+      return;
+    }
+    renderBiliHistory(list);
+  } catch(e) {
+    biliEmpty.style.display = 'block';
+    biliEmpty.textContent = '输入歌名、歌手或 B 站 BV 号进行搜索';
+  }
+}
+
+function renderBiliHistory(list) {
+  biliList.innerHTML = '';
+  const tip = document.createElement('div');
+  tip.style.cssText = 'font-size:12px;color:var(--accent2);font-weight:700;padding:4px 4px 10px;display:flex;align-items:center;gap:6px';
+  tip.innerHTML = '<span>🕒 历史点歌记录</span><span style="font-size:11px;color:var(--sub);font-weight:normal">(点击快速再点)</span>';
+  biliList.appendChild(tip);
+
+  list.forEach(s => {
+    const card = document.createElement('div');
+    card.className = 'song-card';
+    card.style.cssText = 'align-items:center;cursor:pointer;position:relative';
+    const durMin = s.duration ? Math.floor(s.duration/60) + ':' + String(s.duration%60).padStart(2,'0') : '';
+    const coverUrl = s.cover || '/api/cover/' + s.id;
+    card.innerHTML = `
+      <img src="${esc(coverUrl)}" referrerpolicy="no-referrer" style="width:68px;height:48px;border-radius:8px;object-fit:cover;flex-shrink:0" onerror="if(!this._p){this._p=true;this.src='/api/cover/${s.id}';}else{this.src='/icons/album.svg';}">
+      <div class="info" style="margin-left:2px">
+        <div class="title" style="white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.35;font-size:13px;font-weight:600">${esc(s.title)}</div>
+        <div class="artist" style="margin-top:4px;display:flex;align-items:center;gap:6px">
+          <span>${esc(s.artist || 'B站')}</span>
+          ${durMin ? `<span>⏱ ${durMin}</span>` : ''}
+          <span style="color:var(--sub)">🔥 ${s.play_count || 1}次</span>
+        </div>
+      </div>
+      <button class="btn-add" style="background:#fb7299;flex-shrink:0;box-shadow:0 3px 10px rgba(251,114,153,.4)" title="再次点歌">＋</button>
+    `;
+    card.onclick = () => addSong(s.id, s.title);
+    biliList.appendChild(card);
+  });
 }
 
 function renderBiliResults(list) {

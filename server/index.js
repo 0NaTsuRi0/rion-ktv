@@ -11,7 +11,7 @@ const { config } = require('./config');
 const { scanLibrary, rescanLibrary, MV_DIR } = require('./scanner');
 const { ensureHLS, removeHLS, outDir, waitForFile, scheduleHLSCleanup } = require('./hlsgen');
 const { getWatcherStatus } = require('./watcher');
-const { searchBilibili, getBilibiliParts, proxyBilibiliStream, proxyImage } = require('./bilibili');
+const { searchBilibili, getBilibiliParts, proxyBilibiliStream, proxyImage, downloadBilibiliVideo } = require('./bilibili');
 
 // 伴奏文件存在性缓存（避免每次请求都查磁盘）
 let accCache = { timestamp: 0, valid: new Set() };
@@ -325,7 +325,22 @@ app.use('/icons', express.static(path.join(__dirname, '../web/icons')));
 // 卡在这一步转圈的情况。
 app.get('/hls/:id/master.m3u8', async (req, res) => {
   const song = db.prepare('SELECT * FROM songs WHERE id = ?').get(req.params.id);
-  if (!song || !fs.existsSync(song.filepath)) return res.status(404).end();
+  if (!song) return res.status(404).end();
+
+  // 若为 B 站歌曲，确保已下载到本地缓存目录
+  if (song.filename && song.filename.startsWith('bilibili:')) {
+    const parts = song.filename.split(':');
+    const bvid = parts[1];
+    const cid = parts[2];
+    try {
+      song.filepath = await downloadBilibiliVideo(bvid, cid, config.BILI_CACHE_DIR);
+    } catch(err) {
+      log.error('HLS', `B站歌曲下载异常: ${err.message}`);
+      return res.status(502).end();
+    }
+  }
+
+  if (!fs.existsSync(song.filepath)) return res.status(404).end();
   log.info('HLS', `请求播放 master.m3u8: id=${song.id} "${song.title || song.filename}"`);
   try {
     const m3u8Path = await ensureHLS(song);
@@ -475,12 +490,26 @@ app.get('/api/bilibili/cover', (req, res) => {
   proxyImage(req.query.url, res);
 });
 
+// B 站历史点歌列表（未搜索时展示）
+app.get('/api/bilibili/history', (req, res) => {
+  const rows = db.prepare(`
+    SELECT s.id, s.title, s.artist, s.filename, s.cover, s.duration, s.play_count,
+           COALESCE((SELECT MAX(q.created_at) FROM queue q WHERE q.song_id = s.id), s.created_at) as last_time
+    FROM songs s
+    WHERE s.filename LIKE 'bilibili:%'
+    ORDER BY last_time DESC, s.id DESC
+    LIMIT 50
+  `).all();
+  res.json(rows);
+});
+
 app.post('/api/bilibili/enqueue', (req, res) => {
   try {
     const { bvid, cid, partTitle, videoTitle, author, pic, duration, nickname } = req.body || {};
     if (!bvid || !cid) return res.status(400).json({ error: '缺少 bvid 或 cid' });
 
     const key = `bilibili:${bvid}:${cid}`;
+    const targetFilePath = path.join(config.BILI_CACHE_DIR, `${bvid}_${cid}.mp4`);
     let displayTitle = (videoTitle || bvid).trim();
     const pTitle = (partTitle || '').trim();
     if (pTitle && pTitle !== displayTitle) {
@@ -498,12 +527,21 @@ app.post('/api/bilibili/enqueue', (req, res) => {
       const info = db.prepare(`
         INSERT INTO songs (title, artist, filename, filepath, cover, duration, audio_tracks)
         VALUES (?, ?, ?, ?, ?, ?, 1)
-      `).run(displayTitle, displayArtist, key, key, pic || '', sec);
+      `).run(displayTitle, displayArtist, key, targetFilePath, pic || '', sec);
       song = { id: info.lastInsertRowid };
     } else {
-      // 同步最新复合标题与封面
-      db.prepare("UPDATE songs SET title = ?, cover = COALESCE(NULLIF(cover, ''), ?) WHERE id = ?").run(displayTitle, pic || '', song.id);
+      // 同步最新复合标题、本地缓存路径与封面
+      db.prepare("UPDATE songs SET title = ?, filepath = ?, cover = COALESCE(NULLIF(cover, ''), ?) WHERE id = ?")
+        .run(displayTitle, targetFilePath, pic || '', song.id);
     }
+
+    // 后台立即触发视频下载与 HLS 预热切片
+    downloadBilibiliVideo(bvid, cid, config.BILI_CACHE_DIR).then(savedPath => {
+      const fullSong = db.prepare('SELECT * FROM songs WHERE id = ?').get(song.id);
+      if (fullSong) {
+        ensureHLS(fullSong).catch(e => log.warn('HLS', `B站预切片提示: ${e.message}`));
+      }
+    }).catch(e => log.error('BILI', `后台下载B站视频失败: ${e.message}`));
 
     const qInfo = db.prepare('INSERT INTO queue (song_id, nickname) VALUES (?, ?)').run(song.id, nickname || '匿名用户');
     db.prepare('UPDATE songs SET play_count = play_count + 1 WHERE id = ?').run(song.id);
@@ -621,11 +659,11 @@ app.get('/api/songs', (req, res) => {
   const artist = (req.query.artist || '').trim();
   let rows;
   if (artist) {
-    rows = db.prepare('SELECT * FROM songs WHERE artist LIKE ? ORDER BY title').all(`%${artist}%`);
+    rows = db.prepare("SELECT * FROM songs WHERE filename NOT LIKE 'bilibili:%' AND artist LIKE ? ORDER BY title").all(`%${artist}%`);
   } else if (q) {
-    rows = db.prepare('SELECT * FROM songs WHERE title LIKE ? OR artist LIKE ? ORDER BY play_count DESC LIMIT 100').all(`%${q}%`, `%${q}%`);
+    rows = db.prepare("SELECT * FROM songs WHERE filename NOT LIKE 'bilibili:%' AND (title LIKE ? OR artist LIKE ?) ORDER BY play_count DESC LIMIT 100").all(`%${q}%`, `%${q}%`);
   } else {
-    rows = db.prepare('SELECT * FROM songs ORDER BY play_count DESC, id DESC').all();
+    rows = db.prepare("SELECT * FROM songs WHERE filename NOT LIKE 'bilibili:%' ORDER BY play_count DESC, id DESC").all();
   }
   // 校验伴奏文件是否存在（带缓存）
   rows.forEach(s => s.accompaniment_valid = isAccValid(s.accompaniment, s.audio_tracks));
@@ -635,7 +673,7 @@ app.get('/api/songs', (req, res) => {
 // 按首字母搜索
 app.get('/api/songs/letter/:letter', (req, res) => {
   const letter = req.params.letter.toUpperCase();
-  const rows = db.prepare('SELECT * FROM songs WHERE UPPER(SUBSTR(title,1,1)) = ? ORDER BY title LIMIT 100').all(letter);
+  const rows = db.prepare("SELECT * FROM songs WHERE filename NOT LIKE 'bilibili:%' AND UPPER(SUBSTR(title,1,1)) = ? ORDER BY title LIMIT 100").all(letter);
   res.json(rows);
 });
 
@@ -650,7 +688,7 @@ function getPinyinInitial(name) {
 }
 
 app.get('/api/artists', (req, res) => {
-  const rows = db.prepare("SELECT artist FROM songs WHERE artist IS NOT NULL AND artist != ''").all();
+  const rows = db.prepare("SELECT artist FROM songs WHERE filename NOT LIKE 'bilibili:%' AND artist IS NOT NULL AND artist != ''").all();
   const artistMap = {};
   for (const row of rows) {
     const names = row.artist.split('/').map(s => s.trim()).filter(Boolean);
@@ -679,7 +717,7 @@ app.get('/api/history', (req, res) => {
 
 // ---------- 爱唱榜 (按播放次数) ----------
 app.get('/api/charts', (req, res) => {
-  const rows = db.prepare('SELECT * FROM songs WHERE play_count > 0 ORDER BY play_count DESC LIMIT 50').all();
+  const rows = db.prepare("SELECT * FROM songs WHERE filename NOT LIKE 'bilibili:%' AND play_count > 0 ORDER BY play_count DESC LIMIT 50").all();
   res.json(rows);
 });
 
@@ -780,9 +818,9 @@ app.get('/api/watcher', (req, res) => {
 });
 
 app.get('/api/stats', (req, res) => {
-  const songCount  = db.prepare('SELECT COUNT(*) c FROM songs').get().c;
+  const songCount  = db.prepare("SELECT COUNT(*) c FROM songs WHERE filename NOT LIKE 'bilibili:%'").get().c;
   const queueCount = db.prepare("SELECT COUNT(*) c FROM queue WHERE status!='done'").get().c;
-  const totalPlays = db.prepare('SELECT COALESCE(SUM(play_count),0) c FROM songs').get().c;
+  const totalPlays = db.prepare("SELECT COALESCE(SUM(play_count),0) c FROM songs WHERE filename NOT LIKE 'bilibili:%'").get().c;
   res.json({ songCount, queueCount, mvDir: config.MV_DIR, totalPlays });
 });
 
