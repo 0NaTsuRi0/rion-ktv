@@ -868,18 +868,12 @@ app.post('/api/queue', (req, res) => {
 });
 
 app.post('/api/queue/:id/top', (req, res) => {
-  // Bug修复：原来只把这一条设成 is_top=1，从不清除其它行的置顶标记。连续给
-  // 不同歌曲点"置顶"后，会有多条 is_top=1 的记录同时存在，这些记录之间只能
-  // 按 id ASC 排序——最新点的这首排在更早被置顶的那些后面，界面上看起来就是
-  // "点了置顶但完全没反应/挪不动"，也就是卡住无法置顶。
-  // 修复为：先把所有非播放中的置顶标记清空，再把当前这条设为置顶，保证同一
-  // 时刻只有一首歌处于"置顶"状态，每次点击都能确实把这首歌顶到最前面
-  // （紧跟在正在播放的歌曲之后）。
-  const tx = db.transaction((id) => {
-    db.prepare("UPDATE queue SET is_top=0 WHERE status!='playing'").run();
-    db.prepare('UPDATE queue SET is_top=1 WHERE id=?').run(id);
-  });
-  tx(req.params.id);
+  // 置顶优化：采用自增优先级 (MAX(is_top) + 1)，支持多次连续置顶。
+  // 最新点击置顶的歌曲拥有最高权重，排在所有置顶歌曲最前（即紧跟正在播放的歌曲之后）；
+  // 之前被置顶过的歌曲保留原次序依次顺延，绝不会被清零打回队伍末尾，也不会与其它歌曲乱序对调。
+  const row = db.prepare("SELECT COALESCE(MAX(is_top), 0) as max_top FROM queue WHERE status!='playing'").get();
+  const nextTop = (row ? row.max_top : 0) + 1;
+  db.prepare('UPDATE queue SET is_top=? WHERE id=?').run(nextTop, req.params.id);
   broadcastQueue(); res.json({ ok: true });
 });
 
@@ -891,7 +885,7 @@ app.delete('/api/queue/:id', (req, res) => {
 // 即唱：把指定队列项立即设为播放中
 app.post('/api/queue/:id/playnow', (req, res) => {
   const cur = db.prepare("SELECT * FROM queue WHERE status='playing'").get();
-  if (cur) db.prepare("UPDATE queue SET status='done' WHERE id=?").run(cur.id);
+  if (cur) db.prepare("UPDATE queue SET status='done', is_top=0 WHERE id=?").run(cur.id);
   db.prepare("UPDATE queue SET status='playing', is_top=0 WHERE id=?").run(req.params.id);
   broadcastQueue(); res.json({ ok: true });
 });
@@ -899,11 +893,11 @@ app.post('/api/queue/:id/playnow', (req, res) => {
 app.post('/api/queue/next', (req, res) => {
   const cur = db.prepare("SELECT * FROM queue WHERE status='playing' ORDER BY id LIMIT 1").get();
   if (cur) {
-    db.prepare("UPDATE queue SET status='done' WHERE id=?").run(cur.id);
+    db.prepare("UPDATE queue SET status='done', is_top=0 WHERE id=?").run(cur.id);
     db.prepare('INSERT INTO history (song_id,nickname) VALUES (?,?)').run(cur.song_id, cur.nickname);
   }
   const nxt = db.prepare("SELECT * FROM queue WHERE status='waiting' ORDER BY is_top DESC, id ASC LIMIT 1").get();
-  if (nxt) db.prepare("UPDATE queue SET status='playing' WHERE id=?").run(nxt.id);
+  if (nxt) db.prepare("UPDATE queue SET status='playing', is_top=0 WHERE id=?").run(nxt.id);
   broadcastQueue(); res.json({ ok: true });
 });
 
