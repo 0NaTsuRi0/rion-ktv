@@ -12,6 +12,13 @@
 body{width:100vw;height:100vh;overflow:hidden;background:#000;color:var(--text);font-family:"PingFang SC","Microsoft YaHei",sans-serif;user-select:none;-webkit-user-select:none}
 #video-layer{position:fixed;inset:0;z-index:1;background:#000}
 #video-layer video{width:100%;height:100%;object-fit:contain}
+.netease-playing{--karaoke-accent:#b7bdce}
+#netease-stage{position:absolute;inset:0;z-index:0;display:none;overflow:hidden;background:#15091e;pointer-events:none}
+.netease-playing #netease-stage{display:block}
+#netease-stage::before,#netease-stage::after{content:"";position:absolute}
+#netease-stage::before{inset:-4%;background:var(--cover-art,none) center center/cover no-repeat;filter:blur(clamp(8px,1.2vw,28px))}
+#netease-stage::after{inset:0;background:linear-gradient(to bottom,rgba(0,0,0,.36),rgba(0,0,0,.52) 48%,rgba(0,0,0,.84))}
+#netease-cover{position:absolute;z-index:1;top:10%;left:50%;width:min(46vh,76vw);height:min(46vh,76vw);transform:translateX(-50%);object-fit:cover;border-radius:5px;box-shadow:0 14px 48px rgba(0,0,0,.5)}
 #fs-idle{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;background:var(--bg)}
 #fs-idle .big{font-size:48px;font-weight:900;background:linear-gradient(135deg,#ff6b35,#f7c948,#ff6b35);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
 #fs-idle .sub{font-size:18px;color:var(--sub);margin-top:10px}
@@ -21,16 +28,18 @@ body{width:100vw;height:100vh;overflow:hidden;background:#000;color:var(--text);
 #top-bar{position:fixed;top:0;left:0;right:0;z-index:10;display:flex;align-items:center;justify-content:space-between;padding:12px 20px;pointer-events:none}
 #top-bar>*{pointer-events:all}
 #song-info{display:none;position:relative;max-width:400px;min-width:220px}
-#song-info .si-face{display:flex;flex-direction:row;gap:12px;padding:10px 14px;background:var(--card);backdrop-filter:blur(12px);border-radius:12px;width:100%}
+#song-info .si-face{grid-area:1/1;display:flex;flex-direction:row;gap:12px;padding:10px 14px;background:var(--card);backdrop-filter:blur(12px);border-radius:12px;min-width:0;transition:opacity .5s,visibility .5s}
+#song-info:not(.show-next) #si-next,#song-info.show-next #si-now{opacity:0;visibility:hidden}
 #song-info .si-left{display:flex;flex-direction:row;align-items:center;gap:6px;flex-shrink:0}
 #song-info .si-tag{writing-mode:vertical-lr;font-size:9px;font-weight:600;letter-spacing:1px;padding:3px 2px;border-radius:3px;line-height:1.3;flex-shrink:0}
 #song-info .si-tag.playing{color:var(--accent2);background:rgba(54,217,247,.12)}
+.netease-playing #song-info .si-tag.playing{color:var(--karaoke-accent);background:rgba(255,255,255,.1)}
+#song-info .si-tag.next{color:#ff8c42;background:rgba(255,140,66,.12)}
 #song-info .si-cover-wrap{width:46px;height:46px;flex-shrink:0}
 #song-info .si-cover-wrap img{width:46px;height:46px;border-radius:8px;object-fit:cover;display:block}
 #song-info .si-right{display:flex;flex-direction:column;justify-content:center;gap:3px;overflow:hidden;min-width:0;flex:1}
 #song-info .si-title{font-size:19px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #song-info .si-meta{font-size:12px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#song-info .si-next-tip{font-size:11px;color:#ffaa44;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #clock-box{background:var(--card);backdrop-filter:blur(12px);border-radius:12px;padding:8px 14px;display:flex;flex-direction:row;align-items:center;gap:12px}
 #clock-box .ct{text-align:right}
 #clock-box .ct .time{font-size:22px;font-weight:600}
@@ -41,6 +50,15 @@ body{width:100vw;height:100vh;overflow:hidden;background:#000;color:var(--text);
 /* 底部进度条 */
 #prog-bar{position:fixed;bottom:0;left:0;right:0;z-index:10;height:6px;background:rgba(255,255,255,.06)}
 #prog-bar .fill{height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .3s}
+.netease-playing #prog-bar .fill{background:var(--karaoke-accent)}
+
+#lyrics{position:fixed;left:50%;bottom:8%;z-index:7;transform:translateX(-50%);width:max-content;max-width:80vw;padding:.2em .55em;border-radius:8px;background:var(--card);color:#fff;text-align:center;font-size:clamp(18px,3vw,48px);font-weight:700;line-height:1.3;overflow-wrap:anywhere;text-shadow:0 2px 4px #000;pointer-events:none}
+#karaoke-lyrics{position:fixed;inset:60% 6% 8%;z-index:7;grid-template-rows:repeat(2,minmax(0,1fr));font-size:clamp(22px,min(5.5vw,10vh),96px);font-weight:900;pointer-events:none}
+#karaoke-lyrics:not([hidden]){display:grid}
+.karaoke-row{display:flex;align-items:center;min-width:0;min-height:0;text-align:left}
+.karaoke-row:last-child{text-align:right}
+.karaoke-line{width:100%;min-width:0;font-size:min(1em,calc(76.5vw / var(--line-width,1)));line-height:1.2;white-space:nowrap;color:#fff9;text-shadow:0 1px 2px #100916,0 3px 5px rgba(0,0,0,.85);transition:color var(--lyric-transition) linear,font-size var(--lyric-transition) linear}
+.karaoke-line.active{color:var(--karaoke-accent);font-size:min(1.15em,calc(88vw / var(--line-width,1)))}
 
 #qr-corner{position:fixed;right:20px;bottom:20px;z-index:5;background:var(--card);border-radius:16px;padding:8px;cursor:pointer}
 #qr-corner img{display:block;width:110px;height:110px}
@@ -72,6 +90,7 @@ body{width:100vw;height:100vh;overflow:hidden;background:#000;color:var(--text);
 
 <div id="video-layer">
   <video id="video" muted></video>
+  <div id="netease-stage"><img id="netease-cover" alt="" hidden referrerpolicy="no-referrer"></div>
   <div id="fs-idle"><div class="big">璃音K歌</div><div class="sub">扫码点歌 · 大屏沉浸演唱</div><div class="sub" style="margin-top:20px;color:#ff8c42;font-size:16px">👆 点击屏幕开始</div></div>
   <div id="load-overlay">
     <div class="spinner"></div>
@@ -84,12 +103,21 @@ body{width:100vw;height:100vh;overflow:hidden;background:#000;color:var(--text);
     <div class="si-face" id="si-now">
       <div class="si-left">
         <div class="si-tag playing">播放中</div>
-        <div class="si-cover-wrap"><img id="si-cover" src="/icons/album.svg" referrerpolicy="no-referrer" onerror="this.src='/icons/album.svg'"></div>
+        <div class="si-cover-wrap"><img id="si-cover" src="/icons/album.svg" referrerpolicy="no-referrer"></div>
       </div>
       <div class="si-right">
         <div class="si-title" id="si-title">—</div>
         <div class="si-meta" id="si-meta">—</div>
-        <div class="si-next-tip" id="si-next-tip" style="display:none"></div>
+      </div>
+    </div>
+    <div class="si-face" id="si-next">
+      <div class="si-left">
+        <div class="si-tag next">下一首</div>
+        <div class="si-cover-wrap"><img id="si-cover-next" src="/icons/album.svg" referrerpolicy="no-referrer"></div>
+      </div>
+      <div class="si-right">
+        <div class="si-title" id="si-title-next">—</div>
+        <div class="si-meta" id="si-meta-next">—</div>
       </div>
     </div>
   </div>
@@ -104,6 +132,11 @@ body{width:100vw;height:100vh;overflow:hidden;background:#000;color:var(--text);
   </div>
 
 <div id="prog-bar"><div class="fill" id="prog-fill"></div></div>
+<div id="lyrics" hidden></div>
+<div id="karaoke-lyrics" hidden>
+  <div class="karaoke-row"><span class="karaoke-line"></span></div>
+  <div class="karaoke-row"><span class="karaoke-line"></span></div>
+</div>
 <div id="ctrl-indicators">
   <span class="ci-badge" id="ci-vol">🔊 100%</span>
   <span class="ci-badge" id="ci-voice">🎤 原唱</span>
@@ -118,9 +151,19 @@ const fsIdle=document.getElementById('fs-idle');
 const loadOverlay=document.getElementById('load-overlay');
 const songInfo=document.getElementById('song-info');
 const progBar=document.getElementById('prog-bar');
+const lyrics=document.getElementById('lyrics');
+const karaokeLyrics=document.getElementById('karaoke-lyrics');
+const karaokeLines=karaokeLyrics.querySelectorAll('.karaoke-line');
+const lyricTransitionMs=180;
+karaokeLyrics.style.setProperty('--lyric-transition',lyricTransitionMs+'ms');
+const neteaseStage=document.getElementById('netease-stage');
+const neteaseCover=document.getElementById('netease-cover');
 const toast=document.getElementById('toast');
 
 let queueData=[],curSong=null,voiceTrack=0,audioReady=false,hls=null,loadDur=0,tvVolume=1;
+let infoAltTimer=null;
+let lyricCues=[],lyricRequest=null,lyricsEnabled=true;
+let lyricFrame=0;
 // 音量转换：线性值(0-1 符合听觉) ↔ 实际 video.volume(指数)
 function lin2vol(lin){return lin*lin;}
 function vol2lin(vol){return Math.sqrt(vol);}
@@ -187,41 +230,245 @@ function connectWS(){
 function render(){
   const playing=queueData.find(q=>q.status==='playing');
   const next=queueData.find(q=>q.status==='waiting');
+  const isNetease=Boolean(playing?.filename?.startsWith('netease:'));
+  document.body.classList.toggle('netease-playing',isNetease);
   if(playing){
+    const songChanged=!curSong||curSong.queue_id!==playing.queue_id;
     fsIdle.style.display='none';video.style.display='block';
-    songInfo.style.display='flex';
-    updateSongInfo(playing,next);
-    if(!curSong||curSong.queue_id!==playing.queue_id){destroyHLS();curSong=playing;loadSong(playing.song_id);}
+    songInfo.style.display='grid';
+    updateSongInfo(playing,next,songChanged);
+    if(songChanged){
+      if(isNetease&&updateSongCover(neteaseCover,playing,true)){
+        neteaseCover.hidden=true;
+        neteaseStage.style.removeProperty('--cover-art');
+        document.body.style.removeProperty('--karaoke-accent');
+      }
+      destroyHLS();curSong=playing;loadSong(playing.song_id);
+      loadLyrics(playing.song_id);
+    }
   }else{
     destroyHLS();video.pause();video.style.display='none';video.removeAttribute('src');
     fsIdle.style.display='flex';resetIdle();
     songInfo.style.display='none';loadOverlay.style.display='none';
+    resetSongInfoRotation();
+    clearLyrics();
     loadDur=0;curSong=null;document.getElementById('prog-fill').style.width='0';if(progBar)progBar.style.display='none';
   }
 }
 
-function updateSongInfo(playing,next){
-  document.getElementById('si-title').textContent=playing.title;
-  document.getElementById('si-meta').textContent=`${playing.artist||''} · ${playing.nickname||'匿名用户'}`;
-  const coverEl=document.getElementById('si-cover');
-  const targetSrc='/api/cover/'+playing.song_id+'?t='+(playing.queue_id||playing.song_id);
-  if(coverEl.getAttribute('data-song')!==String(playing.song_id)){
-    coverEl.setAttribute('data-song',String(playing.song_id));
+function resetSongInfoRotation(){
+  clearInterval(infoAltTimer);
+  infoAltTimer=null;
+  songInfo.classList.remove('show-next');
+}
+
+function updateSongCard(song,suffix=''){
+  document.getElementById('si-title'+suffix).textContent=song.title;
+  document.getElementById('si-meta'+suffix).textContent=`${song.artist||''} · ${song.nickname||'匿名用户'}`;
+  updateSongCover(document.getElementById('si-cover'+suffix),song);
+}
+
+function updateSongCover(coverEl,song,palette=false){
+  const targetSrc='/api/cover/'+song.song_id+'?t='+(song.queue_id||song.song_id);
+  if(coverEl.getAttribute('data-cover')===targetSrc)return false;
+  coverEl.setAttribute('data-cover',targetSrc);
+  const fallback=()=>{
+    coverEl.onerror=null;
+    coverEl.src='/icons/album.svg';
+  };
+  coverEl.onerror=palette?()=>{
+    coverEl.onerror=fallback;
     coverEl.src=targetSrc;
+  }:fallback;
+  coverEl.src=palette?targetSrc+'&palette=1':targetSrc;
+  return true;
+}
+
+function coverAccent(pixels){
+  const colors=new Map();
+  let dominant=null;
+  for(let i=0;i<pixels.length;i+=4){
+    const r=pixels[i],g=pixels[i+1],b=pixels[i+2];
+    const peak=Math.max(r,g,b);
+    const chroma=peak-Math.min(r,g,b);
+    if(pixels[i+3]<192||peak<44||chroma<18)continue;
+    const hue=Math.atan2(Math.sqrt(3)*(g-b),2*r-g-b);
+    const key=(Math.round(6*hue/Math.PI)+12)%12;
+    // 主色优先按覆盖面积选，降低少量高饱和细节的影响。
+    const weight=1+Math.min(chroma,150)/200;
+    const color=colors.get(key)||{r:0,g:0,b:0,score:0};
+    color.r+=r*weight/peak;
+    color.g+=g*weight/peak;
+    color.b+=b*weight/peak;
+    color.score+=weight;
+    colors.set(key,color);
+    if(!dominant||color.score>dominant.score)dominant=color;
   }
-  const nextEl=document.getElementById('si-next-tip');
-  if(next&&next.title){
-    nextEl.textContent='⏭ 下一首: '+next.title;
-    nextEl.style.display='block';
-  }else{
-    nextEl.style.display='none';
+  if(!dominant)return '#b7bdce';
+
+  // 保留封面主色的色相，提亮后用于深色背景上的歌词。
+  const channels=[dominant.r,dominant.g,dominant.b].map(value=>Math.round(82+173*value/dominant.score));
+  return 'rgb('+channels.join(',')+')';
+}
+
+function applyCoverAccent(image){
+  try{
+    const canvas=document.createElement('canvas');
+    canvas.width=canvas.height=32;
+    const ctx=canvas.getContext('2d');
+    if(!ctx)return false;
+    ctx.drawImage(image,0,0,32,32);
+    document.body.style.setProperty('--karaoke-accent',coverAccent(ctx.getImageData(0,0,32,32).data));
+    return true;
+  }catch(e){
+    return false;
+  }
+}
+
+neteaseCover.addEventListener('load',()=>{
+  neteaseCover.hidden=false;
+  if(neteaseCover.getAttribute('src')==='/icons/album.svg')return;
+  const source=neteaseCover.currentSrc||neteaseCover.src;
+  neteaseStage.style.setProperty('--cover-art','url('+JSON.stringify(source)+')');
+  if(applyCoverAccent(neteaseCover))return;
+
+  // 通过 CDN 直连显示时，另用匿名跨域请求尝试取色。
+  const image=new Image();
+  image.crossOrigin='anonymous';
+  image.onload=()=>{
+    if((neteaseCover.currentSrc||neteaseCover.src)===source)applyCoverAccent(image);
+  };
+  image.src=source;
+});
+
+function updateSongInfo(playing,next,songChanged){
+  if(songChanged||!next)resetSongInfoRotation();
+  updateSongCard(playing);
+  if(!next)return;
+  updateSongCard(next,'-next');
+  if(infoAltTimer===null){
+    infoAltTimer=setInterval(()=>songInfo.classList.toggle('show-next'),10000);
+  }
+}
+
+function parseLrc(lrc){
+  const offset=Number(lrc.match(/^\[offset:\s*([+-]?\d+)\s*\]/im)?.[1]||0)/1000;
+  const cues=[];
+  for(const line of lrc.split(/\r?\n/)){
+    const tags=line.match(/^(?:\[\d+:\d{2}(?:[.:]\d{1,3})?\])+/)?.[0];
+    if(!tags)continue;
+    const text=line.slice(tags.length).trim();
+    for(const [,minutes,seconds,fraction] of tags.matchAll(/\[(\d+):(\d{2})(?:[.:](\d{1,3}))?\]/g)){
+      cues.push({time:Number(minutes)*60+Number(seconds)+Number('0.'+(fraction||'0'))-offset,text});
+    }
+  }
+  return cues.sort((a,b)=>a.time-b.time);
+}
+
+function karaokeCues(cues){
+  const lines=[];
+  const credit=/^(?:作词|作曲|词曲|词|曲|编曲|制作人?|演唱|歌手|原唱|翻唱|混音|录音|母带|Lyrics(?: by)?|Composed by|Composer|Arranger)\s*[:：]/i;
+  for(const cue of cues){
+    if(credit.test(cue.text))continue;
+    if(cue.text){
+      lines.push(cue);
+    }else{
+      // 空白时间戳只结束上一句，不占用上下行的位置。
+      const previous=lines[lines.length-1];
+      if(previous&&previous.end===undefined)previous.end=cue.time;
+    }
+  }
+  return lines;
+}
+
+function renderLyrics(){
+  const time=video.currentTime;
+  let low=0,high=lyricCues.length;
+  while(low<high){
+    const middle=Math.floor((low+high)/2);
+    if(lyricCues[middle].time<=time)low=middle+1;
+    else high=middle;
+  }
+  const ready=lyricsEnabled&&audioReady&&video.readyState>=2&&lyricCues.length>0;
+  const karaoke=ready&&curSong?.filename?.startsWith('netease:');
+  const text=ready&&!karaoke ? lyricCues[low-1]?.text||'' : '';
+  if(lyrics.textContent!==text)lyrics.textContent=text;
+  lyrics.hidden=!text;
+  karaokeLyrics.hidden=!karaoke;
+  if(karaoke)renderKaraokeLines(low-1,time);
+
+  if(karaoke&&!video.paused&&!video.ended){
+    if(!lyricFrame)lyricFrame=requestAnimationFrame(()=>{
+      lyricFrame=0;
+      renderLyrics();
+    });
+  }else if(lyricFrame){
+    cancelAnimationFrame(lyricFrame);
+    lyricFrame=0;
+  }
+}
+
+function renderKaraokeLines(index,time){
+  const visibleIndex=Math.max(index,0);
+  const current=lyricCues[visibleIndex];
+  const next=lyricCues[visibleIndex+1];
+  const previous=lyricCues[visibleIndex-1];
+  const transition=lyricTransitionMs/1000;
+  const end=current.end??next?.time??current.time+4;
+  const active=index>=0&&time<end;
+  const visibleCurrent=current.end!==undefined&&time>=current.end+transition?null:current;
+  // 上一句缩回原大小后，再用它所在的那行预告后续歌词。
+  const preview=previous&&time<(previous.end??current.time)+transition?previous:next;
+  const topIsCurrent=visibleIndex%2===0;
+  setKaraokeLine(karaokeLines[0],topIsCurrent?visibleCurrent:preview,topIsCurrent&&active);
+  setKaraokeLine(karaokeLines[1],topIsCurrent?preview:visibleCurrent,!topIsCurrent&&active);
+}
+
+function setKaraokeLine(line,cue,active){
+  const text=cue?.text||'';
+  if(line.textContent!==text){
+    line.textContent=text;
+    // 全角字按一个字宽计算，半角字用近似宽度，长句保持单行。
+    const width=Array.from(text).reduce((sum,char)=>sum+(/^[\x00-\x7f]$/.test(char)?.65:1),0);
+    line.style.setProperty('--line-width',Math.max(1,width).toFixed(2));
+  }
+  line.classList.toggle('active',active);
+}
+
+function clearLyrics(){
+  if(lyricRequest)lyricRequest.abort();
+  lyricRequest=null;
+  lyricCues=[];
+  renderLyrics();
+}
+
+async function loadLyrics(songId){
+  clearLyrics();
+  const request=new AbortController();
+  lyricRequest=request;
+  try{
+    const response=await fetch('/api/songs/'+songId+'/lyrics',{signal:request.signal});
+    if(!response.ok)return;
+    const {lrc}=await response.json();
+    if(lyricRequest!==request||typeof lrc!=='string')return;
+    const cues=parseLrc(lrc);
+    lyricCues=curSong?.filename?.startsWith('netease:')?karaokeCues(cues):cues;
+    renderLyrics();
+  }catch(e){
+    // 歌词请求失败不影响播放。
   }
 }
 
 function loadSong(songId, track){
   if(track!==undefined)voiceTrack=track;
-  document.getElementById('prog-fill').style.width='0';video.currentTime=0;
+  document.getElementById('prog-fill').style.width='0';
   destroyHLS();
+  if(video.getAttribute('src')?.startsWith('/stream/')){
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+  }
+  video.currentTime=0;
   if(!audioReady){
     loadOverlay.style.display='none';
     fsIdle.style.display='flex';
@@ -234,6 +481,16 @@ function loadSong(songId, track){
   clearTimeout(window._loadTimeout);
   window._loadTimeout=setTimeout(()=>{loadOverlay.style.display='none';if(progBar)progBar.style.display='';},120000);
   destroyHLS();
+
+  if(curSong?.filename?.startsWith('netease:')){
+    voiceTrack=0;
+    updIndicators();broadcastState();
+    document.getElementById('load-text').textContent='正在加载网易云音源…';
+    loadOverlay.style.display='flex';
+    video.src='/stream/'+songId+'?t='+Date.now();
+    video.play().catch(()=>{});
+    return;
+  }
 
   const isBili = curSong && curSong.filename && curSong.filename.startsWith('bilibili:');
   const lt = document.getElementById('load-text');
@@ -331,12 +588,17 @@ function togglePause(){
   broadcastState();
 }
 function cutSong(){
+  clearLyrics();
   loadOverlay.style.display='flex';document.getElementById('prog-fill').style.width='0';destroyHLS();
   video.pause();video.style.display='none';document.getElementById('pause-overlay').style.display='none';
   fetch('/api/queue/next',{method:'POST'});
 }
 function restartSong(){video.currentTime=0;video.play().catch(()=>{});showToast('重唱 🔄');}
 function toggleVoice(){
+  if(curSong?.filename?.startsWith('netease:')){
+    showToast('网易云歌曲只有单音轨');
+    return;
+  }
   if(curSong && curSong.filename && curSong.filename.startsWith('bilibili:')){
     showToast('B站歌曲为单轨伴奏，不支持切原唱');
     return;
@@ -363,13 +625,24 @@ video.addEventListener('play',()=>{
 });
 video.addEventListener('playing',()=>{
   fsIdle.style.display='none';loadOverlay.style.display='none';if(progBar)progBar.style.display='';resetIdle();
+  renderLyrics();
   tvVolume=vol2lin(video.volume);broadcastState();
 });
 video.addEventListener('pause',()=>{
+  renderLyrics();
   if(curSong&&!video.ended){document.getElementById('pause-overlay').style.display='flex';}
 });
+video.addEventListener('seeked',renderLyrics);
 video.addEventListener('waiting',()=>{if(!video.paused)loadOverlay.style.display='flex';});
+video.addEventListener('error',()=>{
+  if(!curSong?.filename?.startsWith('netease:')||!video.getAttribute('src')?.startsWith('/stream/'+curSong.song_id+'?'))return;
+  clearTimeout(window._loadTimeout);
+  loadOverlay.style.display='none';
+  clearLyrics();
+  showToast('网易云音源无法播放，可以切换下一首');
+});
 video.addEventListener('timeupdate',()=>{
+  renderLyrics();
   var dur=video.duration&&isFinite(video.duration)&&video.duration>0?video.duration:(loadDur||0);
   if(dur>0){
     var pct=Math.min(100,video.currentTime/dur*100);
@@ -391,6 +664,7 @@ document.addEventListener('keydown',e=>{
     case'f':e.preventDefault();document.fullscreenElement?document.exitFullscreen():document.body.requestFullscreen().catch(()=>{});break;
     case'v':e.preventDefault();toggleVoice();break;
     case'r':e.preventDefault();restartSong();break;
+    case'l':e.preventDefault();lyricsEnabled=!lyricsEnabled;renderLyrics();break;
   }
 });
 

@@ -23,6 +23,7 @@ body{margin:0;min-height:100vh;overflow-x:hidden;background:radial-gradient(circ
 .sub-bar{position:sticky;top:var(--top-h);z-index:12;background:rgba(8,8,28,.85);backdrop-filter:blur(12px);display:flex;padding:6px 10px;gap:6px;border-bottom:1px solid rgba(255,255,255,.05)}
 .sub-bar .sb-btn{padding:5px 14px;border-radius:8px;font-size:12px;cursor:pointer;border:none;color:var(--sub);background:rgba(255,255,255,.06);white-space:nowrap}
 .sub-bar .sb-btn.active{color:#fff;background:var(--accent)}
+@media(max-width:380px){.sub-bar .sb-btn{padding-inline:9px}}
 
 /* search row - sticky below sub-bar */
 .search-row{display:flex;align-items:center;gap:6px;padding:8px 12px;background:rgba(8,8,28,.85);backdrop-filter:blur(12px);position:sticky;top:74px;z-index:11}
@@ -31,7 +32,9 @@ body{margin:0;min-height:100vh;overflow-x:hidden;background:radial-gradient(circ
 
 /* songs */
 #sub-all{overflow:visible}
-#song-list{display:flex;flex-direction:column;gap:8px;padding:6px 12px 12px}
+#song-list,#netease-song-list{display:flex;flex-direction:column;gap:8px;padding:6px 12px 12px}
+#netease-search button{padding:8px 14px;border:0;border-radius:10px;background:var(--accent);color:#fff;cursor:pointer;flex-shrink:0}
+#netease-song-list img{width:36px;height:36px;border-radius:6px;object-fit:cover;flex-shrink:0}
 .song-card{display:flex;align-items:center;background:var(--card);border:1px solid rgba(255,255,255,.06);padding:10px 12px;border-radius:14px;gap:10px}
 .song-card .info{flex:1;min-width:0}
 .song-card .title{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -117,10 +120,10 @@ body{margin:0;min-height:100vh;overflow-x:hidden;background:radial-gradient(circ
 <!-- ===== 点歌 tab ===== -->
 <div id="tab-search" class="content active">
 
-  <!-- sub tabs: 全部 | B站 | 歌手 | 喜欢 -->
   <div class="sub-bar">
     <button class="sb-btn active" data-sub="all">全部</button>
     <button class="sb-btn" data-sub="bili" style="color:#fb7299;font-weight:600">📺 B站</button>
+    <button class="sb-btn" data-sub="netease">网易云</button>
     <button class="sb-btn" data-sub="artist">歌手</button>
     <button class="sb-btn" data-sub="fav">喜欢</button>
   </div>
@@ -139,12 +142,21 @@ body{margin:0;min-height:100vh;overflow-x:hidden;background:radial-gradient(circ
   <!-- === B站 === -->
   <div id="sub-bili" style="display:none">
     <div class="search-row">
-      <div class="sb" style="flex:1"><span>🔍</span><input id="bili-search-input" placeholder="搜索 B站 伴奏/歌曲 (如: 晴天 伴奏)"></div>
+      <div class="sb" style="flex:1"><span>🔍</span><input id="bili-search-input" placeholder="歌名、BV 号或 B 站链接"></div>
       <button id="bili-search-btn" style="background:#fb7299;color:#fff;border:none;border-radius:10px;padding:9px 15px;font-size:13px;font-weight:600;cursor:pointer;flex-shrink:0">搜索</button>
     </div>
     <div id="bili-song-list" style="display:flex;flex-direction:column;gap:8px;padding:6px 12px 12px"></div>
-    <div class="empty" id="bili-empty" style="display:block;padding:40px 16px;color:var(--sub)">输入歌名直接搜索 B 站海量伴奏，支持多分P合集精确点歌</div>
+    <div class="empty" id="bili-empty" style="display:block;padding:40px 16px;color:var(--sub)">输入歌名、BV 号，或粘贴 B 站视频链接</div>
     <div class="empty" id="bili-loading" style="display:none;padding:40px 16px;color:var(--accent2)">正在从 B 站高速检索中...</div>
+  </div>
+
+  <div id="sub-netease" style="display:none">
+    <form class="search-row" id="netease-search">
+      <label class="sb" style="flex:1"><span aria-hidden="true">🔍</span><input name="q" maxlength="100" aria-label="搜索网易云歌名或歌手" placeholder="搜索网易云歌名或歌手" required></label>
+      <button type="submit">搜索</button>
+    </form>
+    <div class="empty" id="netease-status" role="status">输入歌名或歌手搜索</div>
+    <div id="netease-song-list"></div>
   </div>
 
   <!-- === 歌手 === -->
@@ -244,7 +256,7 @@ document.querySelectorAll('.btab').forEach(el=>{
   });
 });
 
-// ===== Sub tabs: 全部 | B站 | 歌手 | 喜欢 =====
+// ===== 点歌子页 =====
 document.querySelectorAll('.sb-btn').forEach(el=>{
   el.addEventListener('click',()=>{
     document.querySelectorAll('.sb-btn').forEach(b=>b.classList.remove('active'));
@@ -252,6 +264,7 @@ document.querySelectorAll('.sb-btn').forEach(el=>{
     curSub=el.dataset.sub;
     document.getElementById('sub-all').style.display=curSub==='all'?'':'none';
     document.getElementById('sub-bili').style.display=curSub==='bili'?'':'none';
+    document.getElementById('sub-netease').style.display=curSub==='netease'?'':'none';
     document.getElementById('sub-artist').style.display=curSub==='artist'?'':'none';
     document.getElementById('sub-fav').style.display=curSub==='fav'?'':'none';
     if(curSub==='all') loadSongs(searchInput.value.trim());
@@ -263,6 +276,64 @@ document.querySelectorAll('.sb-btn').forEach(el=>{
     }
   });
 });
+
+const neteaseForm=document.getElementById('netease-search');
+const neteaseStatus=document.getElementById('netease-status');
+const neteaseList=document.getElementById('netease-song-list');
+let neteaseSearch=null;
+
+neteaseForm.addEventListener('submit',async event=>{
+  event.preventDefault();
+  const q=neteaseForm.elements.q.value.trim();
+  if(neteaseSearch)neteaseSearch.abort();
+  neteaseList.textContent='';
+  neteaseStatus.hidden=false;
+  if(!q){neteaseStatus.textContent='输入歌名或歌手搜索';return;}
+  const request=new AbortController();
+  neteaseSearch=request;
+  neteaseStatus.textContent='正在搜索网易云音乐…';
+  try{
+    const response=await fetch('/api/netease/search?q='+encodeURIComponent(q),{signal:request.signal});
+    const result=await response.json();
+    if(request.signal.aborted)return;
+    if(!response.ok)throw new Error(result.error);
+    neteaseStatus.textContent='没有找到相关歌曲';
+    neteaseStatus.hidden=result.length>0;
+    result.forEach(track=>{
+      const card=document.createElement('div');
+      card.className='song-card';
+      card.innerHTML='<img alt="" referrerpolicy="no-referrer"><div class="info"><div class="title"></div><div class="artist"></div></div><button type="button" class="btn-add" aria-label="点歌">＋</button>';
+      const cover=card.querySelector('img');
+      cover.onerror=()=>{cover.onerror=null;cover.src='/icons/album.svg';};
+      cover.src=track.cover||'/icons/album.svg';
+      card.querySelector('.title').textContent=track.title;
+      card.querySelector('.artist').textContent=track.artist;
+      const button=card.querySelector('button');
+      button.onclick=()=>enqueueNetease(track,button);
+      neteaseList.appendChild(card);
+    });
+  }catch(error){
+    if(!request.signal.aborted)neteaseStatus.textContent=error.message||'网易云搜索失败';
+  }
+});
+
+async function enqueueNetease(track,button){
+  button.disabled=true;
+  try{
+    const response=await fetch('/api/netease/enqueue',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id:track.id,nickname:nicknameInput.value.trim()})
+    });
+    const result=await response.json();
+    if(!response.ok)throw new Error(result.error);
+    showToast('《'+track.title+'》已加入队列 🎶');
+  }catch(error){
+    showToast(error.message||'网易云点歌失败');
+  }finally{
+    button.disabled=false;
+  }
+}
 
 // ===== B 站搜索与选 P 点歌 =====
 const biliInput = document.getElementById('bili-search-input');
@@ -302,6 +373,7 @@ async function doBiliSearch(page = 1) {
   try {
     const res = await fetch(`/api/bilibili/search?q=${encodeURIComponent(q)}&page=${page}`);
     const list = await res.json();
+    if (!res.ok) throw new Error(list.error || '暂时无法搜索 B 站');
     biliLoading.style.display = 'none';
     if(page === 1 && (!list || !list.length)) {
       biliEmpty.style.display = 'block';
@@ -320,7 +392,12 @@ async function doBiliSearch(page = 1) {
     }
   } catch(e) {
     biliLoading.style.display = 'none';
-    showToast('搜索失败: ' + e.message);
+    if(page === 1) {
+      biliEmpty.style.display = 'block';
+      biliEmpty.textContent = e.message;
+    } else {
+      showToast('搜索失败: ' + e.message);
+    }
   } finally {
     biliSearching = false;
   }
@@ -338,13 +415,13 @@ async function loadBiliHistory() {
     if (biliInput.value.trim()) return;
     if (!list || !list.length) {
       biliEmpty.style.display = 'block';
-      biliEmpty.textContent = '输入歌名、歌手或 B 站 BV 号进行搜索';
+      biliEmpty.textContent = '输入歌名、BV 号，或粘贴 B 站视频链接';
       return;
     }
     renderBiliHistory(list);
   } catch(e) {
     biliEmpty.style.display = 'block';
-    biliEmpty.textContent = '输入歌名、歌手或 B 站 BV 号进行搜索';
+    biliEmpty.textContent = '输入歌名、BV 号，或粘贴 B 站视频链接';
   }
 }
 
@@ -385,16 +462,26 @@ function renderBiliResults(list, append = false) {
     card.className = 'song-card';
     card.style.cssText = 'align-items:center;cursor:pointer;position:relative';
     card.innerHTML = `
-      <img src="${esc(v.pic)}" referrerpolicy="no-referrer" style="width:68px;height:48px;border-radius:8px;object-fit:cover;flex-shrink:0" onerror="if(!this._p){this._p=true;this.src='/api/bilibili/cover?url='+encodeURIComponent('${esc(v.pic)}');}else{this.src='/icons/album.svg';}">
+      <img alt="" referrerpolicy="no-referrer" style="width:68px;height:48px;border-radius:8px;object-fit:cover;flex-shrink:0">
       <div class="info" style="margin-left:2px">
         <div class="title" style="white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.35;font-size:13px;font-weight:600">${esc(v.title)}</div>
         <div class="artist" style="margin-top:4px;display:flex;align-items:center;gap:6px">
           <span>UP: ${esc(v.author)}</span>
           <span>⏱ ${esc(v.duration)}</span>
+          ${v.preferredPage ? '<span>第 ' + esc(v.preferredPage) + ' P</span>' : ''}
         </div>
       </div>
       <button class="btn-add" style="background:#fb7299;flex-shrink:0;box-shadow:0 3px 10px rgba(251,114,153,.4)" title="点歌">＋</button>
     `;
+    const cover = card.querySelector('img');
+    cover.onerror = () => {
+      cover.onerror = () => {
+        cover.onerror = null;
+        cover.src = '/icons/album.svg';
+      };
+      cover.src = /^https?:\/\//.test(v.pic) ? '/api/bilibili/cover?url=' + encodeURIComponent(v.pic) : '/icons/album.svg';
+    };
+    cover.src = v.pic || '/icons/album.svg';
     card.onclick = () => onBiliVideoClick(v);
     biliList.appendChild(card);
   });
@@ -403,11 +490,17 @@ function renderBiliResults(list, append = false) {
 async function onBiliVideoClick(video) {
   showToast('正在解析分P...');
   try {
-    const res = await fetch('/api/bilibili/parts?bvid=' + encodeURIComponent(video.bvid));
-    const parts = await res.json();
+    let parts = video.parts;
+    if (!parts) {
+      const res = await fetch('/api/bilibili/parts?bvid=' + encodeURIComponent(video.bvid));
+      if (!res.ok) return showToast('无法获取该视频分P');
+      parts = await res.json();
+    }
     if(!parts || !parts.length) {
       return showToast('无法获取该视频分P');
     }
+    const preferred = parts.find(part => part.page === video.preferredPage);
+    if (preferred) return await enqueueBiliSong(video, preferred);
     if(parts.length === 1) {
       // 单 P 视频直接加入队列
       await enqueueBiliSong(video, parts[0]);

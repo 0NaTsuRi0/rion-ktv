@@ -109,19 +109,121 @@ async function fetchWbiKeys() {
   return mixin;
 }
 
-// 搜索 B 站视频
-async function searchBilibili(keyword, page = 1) {
-  if (!keyword || !keyword.trim()) return [];
-  const mixinKey = await fetchWbiKeys();
-  const wts = Math.floor(Date.now() / 1000);
-  const params = {
-    keyword: keyword.trim(),
-    search_type: 'video',
-    page: page,
-    page_size: 10,
-    wts: wts
+const BILI_BV = /^bv([a-z0-9]{10})$/i;
+const BILI_VIDEO_HOSTS = new Set(['www.bilibili.com', 'm.bilibili.com', 'bilibili.com']);
+
+function biliVideoId(value) {
+  const bv = BILI_BV.exec(value);
+  if (bv) return { bvid: 'BV' + bv[1] };
+  const av = /^av([1-9]\d*)$/i.exec(value);
+  return av ? { aid: av[1] } : null;
+}
+
+function biliPage(url) {
+  const page = Number(url.searchParams.get('p'));
+  return Number.isSafeInteger(page) && page > 0 ? page : null;
+}
+
+function biliVideoLink(url) {
+  if (!BILI_VIDEO_HOSTS.has(url.hostname)) return null;
+  const path = /^\/video\/([^/]+)\/?$/.exec(url.pathname);
+  return path ? biliVideoId(path[1]) : null;
+}
+
+async function resolveBiliSearch(input) {
+  const id = biliVideoId(input);
+  if (id) return { id, preferredPage: null };
+
+  // 支持手机分享文案，以及从聊天里复制的括号、Markdown 链接。
+  const text = input.replace(/\\&/g, '&');
+  const link = /(?:^|[\s[\](<【】「」（）])((?:https?:\/\/)?(?:(?:www\.|m\.)?bilibili\.com\/video\/|b23\.tv\/)[^\s<>"'\])】」）。，]+)/i.exec(text)?.[1];
+  if (!link) return null;
+  let url = new URL(/^https?:\/\//i.test(link) ? link : 'https://' + link);
+  const preferredPage = biliPage(url);
+  const signal = AbortSignal.timeout(6000);
+  for (let redirects = 0; redirects <= 4; redirects++) {
+    if (url.username || url.password || url.port || !/^https?:$/.test(url.protocol)) break;
+    const direct = biliVideoLink(url);
+    if (direct) return { id: direct, preferredPage: preferredPage || biliPage(url) };
+    if (url.hostname !== 'b23.tv' || !/^\/[a-z0-9]+\/?$/i.test(url.pathname)) break;
+    const shortId = biliVideoId(url.pathname.split('/')[1]);
+    if (shortId) return { id: shortId, preferredPage: preferredPage || biliPage(url) };
+    if (redirects === 4) break;
+
+    let response;
+    try {
+      response = await fetch('https://b23.tv' + url.pathname, { redirect: 'manual', signal });
+    } catch {
+      throw new Error('暂时无法打开 B 站短链接，可以直接搜索 BV 号');
+    }
+    const location = response.headers.get('location');
+    await response.body?.cancel();
+    if (![301, 302, 303, 307, 308].includes(response.status) || !location) break;
+    url = new URL(location, url);
+  }
+  throw new Error('无法从这个 B 站链接找到视频，请检查链接或使用 BV 号');
+}
+
+async function getBiliVideo({ id, preferredPage }) {
+  const headers = { 'User-Agent': 'Mozilla/5.0', Referer: 'https://www.bilibili.com/' };
+  if (config.BILI_COOKIE) headers.Cookie = config.BILI_COOKIE;
+  const base = 'https://api.bilibili.com/x/web-interface/';
+  const lookup = async url => {
+    const { statusCode, body } = await httpGetWithRetry(url, { headers, timeout: 4500 }, 0);
+    if (statusCode !== 200) throw new Error('HTTP ' + statusCode);
+    return JSON.parse(body);
   };
 
+  let reply;
+  try {
+    reply = await lookup(base + 'view?' + new URLSearchParams(id));
+  } catch (error) {
+    log.warn('BILI', '视频详情请求失败: ' + error.message);
+  }
+  if ([-404, -403, 62002].includes(reply?.code)) return null;
+  if (reply?.code !== 0 || !reply.data?.bvid) {
+    try {
+      reply = await lookup(base + 'wbi/view?' + await signedBiliQuery(id));
+    } catch (error) {
+      log.warn('BILI', 'WBI 视频详情请求失败: ' + error.message);
+    }
+    if ([-404, -403, 62002].includes(reply?.code)) return null;
+  }
+  const data = reply?.code === 0 ? reply.data : null;
+  if (!data?.bvid) {
+    // 详情暂不可用时，能确认分 P 的 BV 号仍可以点歌。
+    const parts = id.bvid ? await getBilibiliParts(id.bvid) : [];
+    if (!parts.length) throw new Error('B 站暂时无法读取这个视频的详情或分 P');
+    return {
+      bvid: id.bvid,
+      title: parts.length === 1 ? parts[0].part : id.bvid,
+      author: '',
+      pic: '/icons/album.svg',
+      duration: biliDuration(parts.reduce((total, part) => total + (Number(part.duration) || 0), 0)),
+      preferredPage,
+      parts,
+    };
+  }
+
+  return {
+    bvid: data.bvid,
+    title: data.title,
+    author: data.owner?.name || '',
+    pic: data.pic?.replace(/^\/\//, 'https://') || '/icons/album.svg',
+    duration: biliDuration(data.duration),
+    play: data.stat?.view || 0,
+    preferredPage,
+  };
+}
+
+function biliDuration(duration) {
+  const seconds = Math.max(0, Math.floor(Number(duration) || 0));
+  return Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
+}
+
+async function signedBiliQuery(params) {
+  const mixinKey = await fetchWbiKeys();
+  params = { ...params, wts: Math.floor(Date.now() / 1000) };
   const sortedKeys = Object.keys(params).sort();
   const queryParts = [];
   for (const k of sortedKeys) {
@@ -131,7 +233,20 @@ async function searchBilibili(keyword, page = 1) {
   const queryStr = queryParts.join('&');
   const w_rid = crypto.createHash('md5').update(queryStr + mixinKey).digest('hex');
 
-  const searchUrl = 'https://api.bilibili.com/x/web-interface/wbi/search/type?' + queryStr + '&w_rid=' + w_rid;
+  return queryStr + '&w_rid=' + w_rid;
+}
+
+// 搜索 B 站视频，BV 号和视频链接走精确查询。
+async function searchBilibili(keyword, page = 1) {
+  if (!keyword || !keyword.trim()) return [];
+  const direct = await resolveBiliSearch(keyword.trim());
+  if (direct) {
+    if (page !== 1) return [];
+    const video = await getBiliVideo(direct);
+    return video ? [video] : [];
+  }
+  const query = await signedBiliQuery({ keyword: keyword.trim(), search_type: 'video', page, page_size: 10 });
+  const searchUrl = 'https://api.bilibili.com/x/web-interface/wbi/search/type?' + query;
 
   const headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',

@@ -70,6 +70,7 @@ const config = {
   VAAPI_DEVICE: process.env.VAAPI_DEVICE || '/dev/dri/renderD128',
   ADMIN_AUTH_ENABLED: process.env.ADMIN_AUTH !== 'false' && process.env.ADMIN_AUTH_ENABLED !== 'false' && process.env.ADMIN_NO_AUTH !== 'true',
   BILI_COOKIE: process.env.BILI_COOKIE || '',
+  NETEASE_MUSIC_U: process.env.NETEASE_MUSIC_U || '',
 
   get ffmpegPath() { return process.env.FFMPEG_PATH || 'ffmpeg'; },
   get ffprobePath() { return process.env.FFPROBE_PATH || 'ffprobe'; },

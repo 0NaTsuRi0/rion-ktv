@@ -217,7 +217,7 @@ async function scanLibrary() {
 
   // v2.0.0: 补全旧记录的视频元数据（时长、编码、分辨率）
   try {
-    const pendingMeta = db.prepare('SELECT id, filepath FROM songs WHERE duration IS NULL OR video_codec IS NULL').all();
+    const pendingMeta = db.prepare("SELECT id, filepath FROM songs WHERE filepath <> '' AND (duration IS NULL OR video_codec IS NULL)").all();
     const updMeta = db.prepare('UPDATE songs SET duration=?, video_codec=?, audio_codec=?, width=?, height=? WHERE id=?');
     for (const row of pendingMeta) {
       try {
@@ -234,7 +234,7 @@ async function scanLibrary() {
 
   // 扫描伴奏文件：只检查还没有伴奏的歌曲
   try {
-    const rows = db.prepare('SELECT id, filepath FROM songs WHERE accompaniment IS NULL').all();
+    const rows = db.prepare("SELECT id, filepath FROM songs WHERE filepath <> '' AND accompaniment IS NULL").all();
     const updAcc = db.prepare('UPDATE songs SET accompaniment = ? WHERE id = ?');
     for (const row of rows) {
       const dir = path.dirname(row.filepath);
@@ -257,7 +257,7 @@ async function scanLibrary() {
   let removed = 0;
   try {
     const currentRelSet = new Set(files.map(f => path.relative(MV_DIR, f)));
-    const all = db.prepare('SELECT id, filename FROM songs').all();
+    const all = db.prepare("SELECT id, filename FROM songs WHERE filepath <> ''").all();
     // queue 表对 songs.id 有真实的外键约束，但 /api/queue/next 只会把已播完的
     // 队列条目标记成 status='done'，从来不会真正从 queue 表删除——这些"done"的
     // 历史队列记录会一直留着引用 song_id，导致下面删 songs 这一行时被外键约束

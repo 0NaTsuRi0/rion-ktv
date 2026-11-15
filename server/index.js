@@ -11,6 +11,8 @@ const { config } = require('./config');
 const { scanLibrary, rescanLibrary, MV_DIR } = require('./scanner');
 const { ensureHLS, removeHLS, outDir, waitForFile, scheduleHLSCleanup } = require('./hlsgen');
 const { getWatcherStatus } = require('./watcher');
+const { getLyrics } = require('./lyrics');
+const { neteaseId, searchTracks, toTrack, getTrack, getAudioUrl, getCoverImage } = require('./netease');
 const { searchBilibili, getBilibiliParts, proxyBilibiliStream, proxyImage, saveRemoteImage, downloadBilibiliVideo } = require('./bilibili');
 
 // 伴奏文件存在性缓存（避免每次请求都查磁盘）
@@ -208,6 +210,17 @@ app.get('/api/cover/:id', (req, res) => {
   const DEFAULTS = path.join(__dirname, '../web/icons');
   const song = db.prepare('SELECT * FROM songs WHERE id = ?').get(req.params.id);
   if (song) {
+    if (neteaseId(song.filename)) {
+      if (req.query.palette === '1') {
+        // 同源返回封面，允许 TV 用 Canvas 读取像素配色。
+        return getCoverImage(song.cover).then(image => {
+          if (!image) return res.sendStatus(404);
+          res.set({ 'Content-Type': image.type, 'Cache-Control': 'public, max-age=86400' });
+          return res.send(image.bytes);
+        }, () => res.sendStatus(502));
+      }
+      return song.cover ? res.redirect(song.cover) : res.sendFile(path.join(DEFAULTS, 'album.svg'));
+    }
     const isBili = (song.filename && song.filename.startsWith('bilibili:'));
     if (isBili) {
       const parts = song.filename.split(':');
@@ -562,6 +575,47 @@ app.get('/stream/bilibili/:bvid/:cid', (req, res) => {
   proxyBilibiliStream(req, res, req.params.bvid, req.params.cid);
 });
 
+app.get('/api/netease/search', async (req, res) => {
+  const keyword = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+  if (!keyword || keyword.length > 100) return res.status(400).json({ error: '请输入 1–100 个字符的歌名或歌手' });
+  try {
+    const tracks = await searchTracks(keyword);
+    res.json(tracks.filter(track => track.id && track.name).map(toTrack));
+  } catch (error) {
+    log.warn('NETEASE', '搜索失败: ' + error.message);
+    res.status(502).json({ error: '暂时无法搜索网易云音乐' });
+  }
+});
+
+app.post('/api/netease/enqueue', async (req, res) => {
+  const { id, nickname } = req.body || {};
+  const providerId = typeof id === 'string' && /^[1-9]\d{0,15}$/.test(id) && Number.isSafeInteger(Number(id)) ? id : null;
+  if (!providerId) return res.status(400).json({ error: '网易云歌曲 ID 无效' });
+  try {
+    const [track, url] = await Promise.all([getTrack(providerId), getAudioUrl(providerId)]);
+    if (!track) return res.status(404).json({ error: '网易云音乐中没有这首歌' });
+    if (!url) return res.status(422).json({ error: '网易云当前未提供这首歌的完整音源' });
+
+    const filename = 'netease:' + providerId;
+    const queued = db.transaction(() => {
+      db.prepare(`
+        INSERT INTO songs (title, artist, filename, filepath, cover, duration, audio_tracks)
+        VALUES (?, ?, ?, '', ?, ?, 1)
+        ON CONFLICT(filename) DO UPDATE SET title=excluded.title, artist=excluded.artist,
+          cover=excluded.cover, duration=excluded.duration
+      `).run(track.title, track.artist, filename, track.cover, track.duration);
+      const song = db.prepare('SELECT id FROM songs WHERE filename=?').get(filename);
+      const nick = typeof nickname === 'string' ? nickname.trim().slice(0, 100) : '';
+      return { song_id: song.id, queue_id: enqueueSong(song.id, nick) };
+    })();
+    broadcastQueue();
+    res.json({ ok: true, ...queued });
+  } catch (error) {
+    log.warn('NETEASE', '点歌失败: ' + error.message);
+    res.status(502).json({ error: '暂时无法点播网易云歌曲' });
+  }
+});
+
 // ---------- MV 直传流 (Range 请求) ----------
 // 历史接口，现已不是 TV 播放器的主路径(见上面的 /hls)。保留作为兼容兜底：
 // 例如 hls.js 加载失败、或未来某个场景需要拿到原始文件直传时使用。仍支持
@@ -571,6 +625,18 @@ app.get('/stream/bilibili/:bvid/:cid', (req, res) => {
 app.get('/stream/:id', (req, res) => {
   const song = db.prepare('SELECT * FROM songs WHERE id = ?').get(req.params.id);
   if (!song) return res.status(404).end();
+
+  const onlineId = neteaseId(song.filename);
+  if (onlineId) {
+    return getAudioUrl(onlineId).then(url => {
+      if (!url) return res.status(404).end();
+      res.set('Cache-Control', 'no-store');
+      return res.redirect(url);
+    }).catch(error => {
+      log.warn('NETEASE', '播放失败: ' + error.message);
+      return res.status(502).end();
+    });
+  }
 
   // B 站网络歌曲直接代理流
   if (song.filename && song.filename.startsWith('bilibili:')) {
@@ -654,16 +720,17 @@ app.post('/api/voice/switch', (req, res) => {
 });
 
 // ---------- 歌曲库 ----------
+const localSong = "filename NOT LIKE 'bilibili:%' AND filename NOT LIKE 'netease:%'";
 app.get('/api/songs', (req, res) => {
   const q = (req.query.q || '').trim();
   const artist = (req.query.artist || '').trim();
   let rows;
   if (artist) {
-    rows = db.prepare("SELECT * FROM songs WHERE filename NOT LIKE 'bilibili:%' AND artist LIKE ? ORDER BY title").all(`%${artist}%`);
+    rows = db.prepare("SELECT * FROM songs WHERE " + localSong + " AND artist LIKE ? ORDER BY title").all(`%${artist}%`);
   } else if (q) {
-    rows = db.prepare("SELECT * FROM songs WHERE filename NOT LIKE 'bilibili:%' AND (title LIKE ? OR artist LIKE ?) ORDER BY play_count DESC LIMIT 100").all(`%${q}%`, `%${q}%`);
+    rows = db.prepare("SELECT * FROM songs WHERE " + localSong + " AND (title LIKE ? OR artist LIKE ?) ORDER BY play_count DESC LIMIT 100").all(`%${q}%`, `%${q}%`);
   } else {
-    rows = db.prepare("SELECT * FROM songs WHERE filename NOT LIKE 'bilibili:%' ORDER BY play_count DESC, id DESC").all();
+    rows = db.prepare("SELECT * FROM songs WHERE " + localSong + " ORDER BY play_count DESC, id DESC").all();
   }
   // 校验伴奏文件是否存在（带缓存）
   rows.forEach(s => s.accompaniment_valid = isAccValid(s.accompaniment, s.audio_tracks));
@@ -673,7 +740,7 @@ app.get('/api/songs', (req, res) => {
 // 按首字母搜索
 app.get('/api/songs/letter/:letter', (req, res) => {
   const letter = req.params.letter.toUpperCase();
-  const rows = db.prepare("SELECT * FROM songs WHERE filename NOT LIKE 'bilibili:%' AND UPPER(SUBSTR(title,1,1)) = ? ORDER BY title LIMIT 100").all(letter);
+  const rows = db.prepare("SELECT * FROM songs WHERE " + localSong + " AND UPPER(SUBSTR(title,1,1)) = ? ORDER BY title LIMIT 100").all(letter);
   res.json(rows);
 });
 
@@ -688,7 +755,7 @@ function getPinyinInitial(name) {
 }
 
 app.get('/api/artists', (req, res) => {
-  const rows = db.prepare("SELECT artist FROM songs WHERE filename NOT LIKE 'bilibili:%' AND artist IS NOT NULL AND artist != ''").all();
+  const rows = db.prepare("SELECT artist FROM songs WHERE " + localSong + " AND artist IS NOT NULL AND artist != ''").all();
   const artistMap = {};
   for (const row of rows) {
     const names = row.artist.split('/').map(s => s.trim()).filter(Boolean);
@@ -717,7 +784,7 @@ app.get('/api/history', (req, res) => {
 
 // ---------- 爱唱榜 (按播放次数) ----------
 app.get('/api/charts', (req, res) => {
-  const rows = db.prepare("SELECT * FROM songs WHERE filename NOT LIKE 'bilibili:%' AND play_count > 0 ORDER BY play_count DESC LIMIT 50").all();
+  const rows = db.prepare("SELECT * FROM songs WHERE " + localSong + " AND play_count > 0 ORDER BY play_count DESC LIMIT 50").all();
   res.json(rows);
 });
 
@@ -818,9 +885,9 @@ app.get('/api/watcher', (req, res) => {
 });
 
 app.get('/api/stats', (req, res) => {
-  const songCount  = db.prepare("SELECT COUNT(*) c FROM songs WHERE filename NOT LIKE 'bilibili:%'").get().c;
+  const songCount  = db.prepare("SELECT COUNT(*) c FROM songs WHERE " + localSong).get().c;
   const queueCount = db.prepare("SELECT COUNT(*) c FROM queue WHERE status!='done'").get().c;
-  const totalPlays = db.prepare("SELECT COALESCE(SUM(play_count),0) c FROM songs WHERE filename NOT LIKE 'bilibili:%'").get().c;
+  const totalPlays = db.prepare("SELECT COALESCE(SUM(play_count),0) c FROM songs WHERE " + localSong).get().c;
   res.json({ songCount, queueCount, mvDir: config.MV_DIR, totalPlays });
 });
 
@@ -831,6 +898,17 @@ app.get('/api/songs/:id/meta', (req, res) => {
   // 校验伴奏文件是否存在（带缓存）
   song.accompaniment_valid = isAccValid(song.accompaniment, song.audio_tracks);
   res.json(song);
+});
+
+app.get('/api/songs/:id/lyrics', async (req, res) => {
+  const song = db.prepare('SELECT id, title, artist, duration, filename FROM songs WHERE id = ?').get(req.params.id);
+  if (!song) return res.status(404).json({ error: '歌曲不存在' });
+  try {
+    res.json(await getLyrics(song) || { lrc: null });
+  } catch (error) {
+    log.warn('LYRICS', '歌词获取失败: ' + error.message);
+    res.status(502).json({ error: '暂时无法获取在线歌词' });
+  }
 });
 
 // ---------- 点歌队列 ----------
@@ -855,16 +933,21 @@ function getQueueWithSongs() {
 
 app.get('/api/queue', (req, res) => res.json(getQueueWithSongs()));
 
+function enqueueSong(songId, nickname) {
+  const info = db.prepare('INSERT INTO queue (song_id,nickname) VALUES (?,?)').run(songId, nickname || '匿名用户');
+  db.prepare('UPDATE songs SET play_count=play_count+1 WHERE id=?').run(songId);
+  const playing = db.prepare("SELECT * FROM queue WHERE status='playing'").get();
+  if (!playing) db.prepare("UPDATE queue SET status='playing' WHERE id=?").run(info.lastInsertRowid);
+  return info.lastInsertRowid;
+}
+
 app.post('/api/queue', (req, res) => {
   const { song_id, nickname } = req.body;
   const song = db.prepare('SELECT * FROM songs WHERE id=?').get(song_id);
   if (!song) return res.status(404).json({ error: '歌曲不存在' });
-  const info = db.prepare('INSERT INTO queue (song_id,nickname) VALUES (?,?)').run(song_id, nickname || '匿名用户');
-  db.prepare('UPDATE songs SET play_count=play_count+1 WHERE id=?').run(song_id);
-  const playing = db.prepare("SELECT * FROM queue WHERE status='playing'").get();
-  if (!playing) db.prepare("UPDATE queue SET status='playing' WHERE id=?").run(info.lastInsertRowid);
+  const id = enqueueSong(song_id, nickname);
   broadcastQueue();
-  res.json({ ok: true, id: info.lastInsertRowid });
+  res.json({ ok: true, id });
 });
 
 app.post('/api/queue/:id/top', (req, res) => {
